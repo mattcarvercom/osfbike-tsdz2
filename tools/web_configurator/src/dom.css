@@ -1,0 +1,259 @@
+/* Styles for dom.ts's shared primitives (icon(), iconButton(), renderToggleGroup())
+   - imported from dom.ts itself since every consumer already imports that
+   module for the functions that build this markup. */
+
+/* ---- Icons: inline SVG built from primitives in dom.ts's ICONS registry,
+   no icon font/library/CDN. Sized to the surrounding text via em so an icon
+   in an h3 is bigger than one in a button without separate size classes. */
+
+.icon {
+  display: inline-flex;
+  flex: none;
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.2em;
+}
+
+.icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.7rem 0;
+}
+
+.toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.toolbar button:hover {
+  border-color: var(--accent);
+}
+
+/* Edit Note button: highlight while its textarea is open, same as help-toggle's aria-expanded state elsewhere. */
+.toolbar button[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--surface-tint-strong);
+}
+
+/* Semantic button colors - the icon (currentColor) and label recolor
+   together automatically. Used sparingly: only for the "main verb" of a
+   panel (Save, Build, Flash) or a genuinely destructive one (Reset,
+   Restore), not every button - a toolbar where everything is colored is the
+   same as a toolbar where nothing is. Selectors are scoped to
+   `.toolbar button.btn-*` (not just `.btn-*`) so they win over the plain
+   `.toolbar button:hover` rule's specificity without needing !important. */
+.toolbar button.btn-accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.toolbar button.btn-teal {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+
+.toolbar button.btn-success {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.toolbar button.btn-danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* Sticky-note yellow for the topbar's Edit Note button - reuses --amber (already
+   an ordinary informational token elsewhere, e.g. field hints/page notes, not
+   exclusively a "danger" color in this app) so it doesn't read as a warning,
+   just visually distinct from the plain Import/Load buttons next to it. */
+.toolbar button.btn-note {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Segmented-button alternative to <select> for controls with <= 3 options
+   (see TOGGLE_GROUP_MAX_OPTIONS in dom.ts) - every choice visible and
+   one click away instead of hidden behind a menu. */
+.toggle-group {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
+
+.toggle-btn {
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  color: inherit;
+}
+
+.toggle-btn:first-child {
+  border-left: none;
+}
+
+.toggle-btn:hover:not(:disabled):not(.toggle-btn-active) {
+  background: var(--surface-tint-strong);
+}
+
+.toggle-btn-active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.toggle-btn:disabled {
+  cursor: not-allowed;
+}
+
+/* Collapsed-by-default dropdown alternative to .toggle-group/<select>
+   (renderVisualPickerDropdown()) - used for Display type, where a thumbnail
+   of the physical display is more useful than a text label alone. Only the
+   trigger (current selection) shows at rest; .visual-picker-panel is an
+   absolutely-positioned overlay so opening it doesn't push the rest of the
+   page's fields down. */
+.visual-picker {
+  position: relative;
+  display: inline-block;
+}
+
+.visual-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font-size: 0.82rem;
+}
+
+.visual-picker-trigger:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.visual-picker-trigger-image {
+  width: 1.6rem;
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
+}
+
+.visual-picker-trigger-chevron {
+  margin-left: 0.15rem;
+}
+
+.visual-picker-trigger[aria-expanded="true"] .visual-picker-trigger-chevron {
+  transform: rotate(180deg);
+}
+
+.visual-picker-panel {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  width: max-content;
+  max-width: min(24rem, 90vw);
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: canvas;
+  box-shadow: 0 0.3rem 0.8rem rgba(0, 0, 0, 0.25);
+}
+
+.visual-picker-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 5.5rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.visual-picker-image {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
+}
+
+.visual-picker-option:hover:not(:disabled):not(.visual-picker-option-active) {
+  border-color: var(--accent);
+  background: var(--surface-tint-strong);
+}
+
+.visual-picker-option-active {
+  border-color: var(--accent);
+  background: var(--surface-tint);
+  font-weight: 600;
+}
+
+/* Unimplemented entries stay visible (so a user can spot their own hardware) but
+   read as inert - grayscale + dimmed image, no hover feedback, "not allowed" cursor. */
+.visual-picker-option-unimplemented {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.visual-picker-option-unimplemented .visual-picker-image {
+  filter: grayscale(1);
+}
+
+/* ---- Responsive: same breakpoint as every other component's mobile block */
+
+@media (max-width: 760px) {
+  /* Desktop's side-by-side segmented buttons (border-left between each,
+     :first-child unset) wrap awkwardly on a narrow phone once a group has 4
+     options or a long label (e.g. "Optional brake input"'s "Temperature
+     sensor") - flexbox has no clean way to detect "this item starts a new
+     wrapped row" to only border those, so a wrapped row just ran directly
+     into the one above it with no line between them. Stacking one option per
+     row sidesteps the whole problem: every row is a genuine :not(:first-child)
+     now, so a plain border-top always lands exactly between two real rows. */
+  .toggle-group {
+    flex-direction: column;
+  }
+
+  .toggle-btn {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    text-align: left;
+  }
+
+  .toggle-btn:first-child {
+    border-top: none;
+  }
+}

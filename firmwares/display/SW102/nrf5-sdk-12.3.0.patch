@@ -1,0 +1,91 @@
+diff -ruN a/components/libraries/uart/app_uart.h b/components/libraries/uart/app_uart.h
+--- a/components/libraries/uart/app_uart.h	2026-08-21 11:04:24.592039405 -0400
++++ b/components/libraries/uart/app_uart.h	2026-08-21 11:04:24.595039338 -0400
+@@ -221,7 +221,8 @@
+  * @retval NRF_SUCCESS          If a byte has been received and pushed to the pointer provided.
+  * @retval NRF_ERROR_NOT_FOUND  If no byte is available in the RX buffer of the app_uart module.
+  */
+-uint32_t app_uart_get(uint8_t * p_byte);
++//uint32_t app_uart_get(uint8_t * p_byte);
++uint8_t app_uart_get(void);
+ 
+ /**@brief Function for putting a byte on the UART.
+  *
+diff -ruN a/components/toolchain/gcc/gcc_startup_nrf51.S b/components/toolchain/gcc/gcc_startup_nrf51.S
+--- a/components/toolchain/gcc/gcc_startup_nrf51.S	2026-08-21 11:04:24.625038680 -0400
++++ b/components/toolchain/gcc/gcc_startup_nrf51.S	2026-08-21 11:04:24.627038636 -0400
+@@ -146,6 +146,16 @@
+     ORRS    R2, R1
+     STR     R2, [R0]
+ 
++/* kevinh - prefill the main stack with deadbeef so we can check for stack overflow later */
++    LDR     R0, =__StackTop
++    LDR     R1, =Stack_Size
++    LDR     R2, =0xDEADBEEF
++.Fill:
++    SUBS    R0,#4
++    STR     R2, [R0]
++    SUBS    R1,#4
++    BNE     .Fill
++
+     LDR     R0, =NRF_POWER_RAMONB_ADDRESS
+     LDR     R2, [R0]
+     ORRS    R2, R1
+diff -ruN a/components/toolchain/gcc/Makefile.common b/components/toolchain/gcc/Makefile.common
+--- a/components/toolchain/gcc/Makefile.common	2026-08-21 11:04:24.604039140 -0400
++++ b/components/toolchain/gcc/Makefile.common	2026-08-21 11:04:24.606039097 -0400
+@@ -13,15 +13,15 @@
+ include $(TOOLCHAIN_CONFIG_FILE)
+ 
+ # Toolchain commands
+-CC      := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-gcc"
+-CXX     := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-c++"
+-AS      := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-as"
+-AR      := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-ar" -r
+-LD      := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-ld"
+-NM      := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-nm"
+-OBJDUMP := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-objdump"
+-OBJCOPY := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-objcopy"
+-SIZE    := "$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-size"
++CC      := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-gcc'
++CXX     := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-c++'
++AS      := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-as'
++AR      := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-ar' -r
++LD      := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-ld'
++NM      := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-nm'
++OBJDUMP := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-objdump'
++OBJCOPY := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-objcopy'
++SIZE    := '$(GNU_INSTALL_ROOT)/bin/$(GNU_PREFIX)-size'
+ $(if $(shell $(CC) --version),,$(info Cannot find: $(CC).) \
+   $(info Please set values in: "$(abspath $(TOOLCHAIN_CONFIG_FILE))") \
+   $(info according to the actual configuration of your system.) \
+@@ -132,18 +132,18 @@
+ # Create objects from C source files
+ $(OUTPUT_DIRECTORY)/%.c.o: | $(OUTPUT_DIRECTORY)
+ 	@echo Compiling file: $(notdir $($@))
+-	$(NO_ECHO)$(CC) -MP -MD -std=c99 $(CFLAGS) $(INC_PATHS) -c -o $@ "$($@)"
++	$(NO_ECHO)$(CC) -MP -MD -std=c99 $(CFLAGS) $(INC_PATHS) -c -o $@ $($@)
+ 
+ # Create objects from C++ source files
+ $(OUTPUT_DIRECTORY)/%.cpp.o: | $(OUTPUT_DIRECTORY)
+ 	@echo Compiling file: $(notdir $($@))
+-	$(NO_ECHO)$(CXX) -MP -MD $(CFLAGS) $(CXXFLAGS) $(INC_PATHS) -c -o $@ "$($@)"
++	$(NO_ECHO)$(CXX) -MP -MD $(CFLAGS) $(CXXFLAGS) $(INC_PATHS) -c -o $@ $($@)
+ 
+ # Create objects from assembly files
+ $(OUTPUT_DIRECTORY)/%.S.o \
+ $(OUTPUT_DIRECTORY)/%.s.o.o: | $(OUTPUT_DIRECTORY)
+ 	@echo Assembling file: $(notdir $($@))
+-	$(NO_ECHO)$(CC) -MP -MD -std=c99 $(ASMFLAGS) $(INC_PATHS) -c -o $@ "$($@)"
++	$(NO_ECHO)$(CC) -MP -MD -std=c99 $(ASMFLAGS) $(INC_PATHS) -c -o $@ $($@)
+ 
+ export FILE_LIST
+ DUMP_FILE_LIST := \
+diff -ruN a/components/toolchain/gcc/Makefile.posix b/components/toolchain/gcc/Makefile.posix
+--- a/components/toolchain/gcc/Makefile.posix	2026-08-21 11:04:24.614038921 -0400
++++ b/components/toolchain/gcc/Makefile.posix	2026-08-21 11:04:24.616038877 -0400
+@@ -1,3 +1,3 @@
+-GNU_INSTALL_ROOT := /usr/local/gcc-arm-none-eabi-4_9-2015q3
++#GNU_INSTALL_ROOT := /usr/local/gcc-arm-none-eabi-4_9-2015q3
+ GNU_VERSION := 4.9.3
+ GNU_PREFIX := arm-none-eabi

@@ -1,0 +1,54 @@
+name: Web Configurator
+
+on:
+  push:
+    paths:
+      - "tools/web_configurator/**"
+      - ".github/workflows/web-configurator.yaml"
+  pull_request:
+    paths:
+      - "tools/web_configurator/**"
+      - ".github/workflows/web-configurator.yaml"
+
+defaults:
+  run:
+    working-directory: tools/web_configurator
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    # Measured locally (npm ci + check + test + build + e2e): ~11s warm cache.
+    # 8 min covers CI's cold npm/Playwright-download overhead with room to
+    # spare, while still catching a hang (e.g. the prior test:e2e stall)
+    # long before it can burn the default 360-minute job timeout.
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/web_configurator/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check, lint, format check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: npm run test:e2e

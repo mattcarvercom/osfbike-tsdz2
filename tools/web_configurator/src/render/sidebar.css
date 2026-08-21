@@ -1,0 +1,160 @@
+.sidebar {
+  flex: none;
+  width: 20rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--surface-tint);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  padding: 0.6rem;
+  gap: 0.15rem;
+}
+
+.sidebar-section-heading {
+  padding: 0.7rem 0.7rem 0.2rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
+/* No top padding on the very first heading - the extra gap above it (meant
+   to separate one group from the previous one) has nothing to separate from
+   at the top of the nav. */
+.sidebar-section-heading:first-child {
+  padding-top: 0.2rem;
+}
+
+/* Wraps the nav button + its optional per-section revert button - a <button>
+   can't nest another <button>, so the revert icon has to be a sibling
+   instead of living inside .sidebar-item like the dot indicator does. */
+.sidebar-item-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.7rem;
+  border: none;
+  border-radius: 0.4rem;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: inherit;
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-revert-btn {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0.3rem;
+  border: 1px solid var(--amber);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--amber);
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.sidebar-revert-btn:hover {
+  opacity: 1;
+  background: var(--amber);
+  color: #fff;
+}
+
+.sidebar-item span:not(.icon):not(.sidebar-dot):not(.sidebar-badge) {
+  flex: 1;
+}
+
+/* Marks a page as not yet hardware-verified - see tools/CLAUDE.md's
+   "Display firmware flashing" section for what's still unverified. */
+.sidebar-badge {
+  flex: none;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--amber);
+  color: #fff;
+}
+
+.sidebar-item-active .sidebar-badge {
+  background: #fff;
+  color: var(--accent);
+}
+
+.sidebar-item .sidebar-icon {
+  opacity: 0.65;
+  color: var(--accent);
+}
+
+.sidebar-item:hover {
+  background: var(--surface-tint-strong);
+}
+
+.sidebar-item:hover .sidebar-icon {
+  opacity: 1;
+}
+
+.sidebar-item-active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.sidebar-item-active .sidebar-icon {
+  opacity: 1;
+  color: #fff;
+}
+
+/* Always amber, regardless of hover/active state - it's a status indicator
+   (unsaved changes in this section), not part of the item's own styling. */
+.sidebar-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--amber) !important;
+  flex: none;
+}
+
+/* ---- Responsive: sidebar becomes a horizontal tab strip under the topbar */
+
+@media (max-width: 760px) {
+  .sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-nav {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .sidebar-item {
+    white-space: nowrap;
+  }
+
+  /* A vertical section label reads as broken, not organizational, once the
+     nav becomes a horizontal tab strip - drop the grouping visually here
+     rather than trying to reflow it sideways; the tab strip just becomes
+     one flat scrolling list, same as before section headings existed. */
+  .sidebar-section-heading {
+    display: none;
+  }
+}

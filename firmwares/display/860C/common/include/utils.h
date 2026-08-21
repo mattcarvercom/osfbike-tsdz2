@@ -1,0 +1,20 @@
+/*
+ * LCD3 firmware
+ *
+ * Copyright (C) Casainho, 2018.
+ *
+ * Released under the GPL License, Version 3
+ */
+#include <stdint.h>
+#ifndef _UTILS_H
+#define _UTILS_H
+
+uint16_t filter(uint16_t ui16_new_value, uint16_t ui16_old_value, uint8_t ui8_alpha);
+int32_t map(int32_t x, int32_t in_min, int32_t in_max, int32_t out_min, int32_t out_max);
+uint8_t ui8_max(uint8_t value_a, uint8_t value_b);
+uint8_t ui8_min(uint8_t value_a, uint8_t value_b);
+void crc16(uint8_t ui8_data, uint16_t *ui16_crc);
+uint8_t* itoa(uint32_t ui32_i);
+//void ftoa(float n, char *res, int afterpoint);
+
+#endif /* _UTILS_H */

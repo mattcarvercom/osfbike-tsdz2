@@ -1,0 +1,15 @@
+[submodule "tools/web_configurator/vendor/stm8flash"]
+	path = tools/web_configurator/vendor/stm8flash
+	url = https://github.com/vdudouyt/stm8flash.git
+[submodule "tools/web_configurator/vendor/sdcc"]
+	path = tools/web_configurator/vendor/sdcc
+	url = https://github.com/swegener/sdcc.git
+[submodule "tools/web_configurator/vendor/mcpp"]
+	path = tools/web_configurator/vendor/mcpp
+	url = https://github.com/museoa/mcpp.git
+[submodule "tools/web_configurator/vendor/stlink"]
+	path = tools/web_configurator/vendor/stlink
+	url = https://github.com/stlink-org/stlink.git
+[submodule "firmwares/display/860C/lvgl"]
+	path = firmwares/display/860C/lvgl
+	url = https://github.com/lvgl/lvgl.git

@@ -1,19 +1,41 @@
-Debug
-__pycache__
-**/*.launch
-.*
-!.github
-tools/Java_Configurator_Source/
-!tools/Java_Configurator_Source/src
+# Build artifacts (STM8/SDCC toolchain)
 *.hex
 *.bin
 *.elf
 *.dump
 *.ctu-info
-src/Result.log
+*.launch
+Debug
 bin/
-releases/
+src/Result.log
+
+# Python
+__pycache__
+
+# Editor/OS/local config - everything dotfile-named is ignored by default,
+# except CI workflow definitions and the submodule registry, which must
+# stay tracked.
+.*
+!.github
+!.gitmodules
+
+# SW102's nRF5 SDK - fetched on demand by firmwares/display/SW102/setup-sdk.sh,
+# not committed (~70MB zip / ~270MB unpacked third-party vendor tree).
+firmwares/display/SW102/SW102/nRF5_SDK_12.3.0/
+
+# tools/web_configurator (Node/Vite)
+tools/web_configurator/node_modules/
+tools/web_configurator/dist/
+# Prettier/npm project config, not editor/local config - re-include despite
+# the blanket dotfile ignore above.
+!tools/web_configurator/.prettierrc
+!tools/web_configurator/.npmrc
+
+# tests/sim is regenerated at test time, except the checked-in base fixture.
 tests/sim/*
-!_tsdz2.cdef
-!cygwin_32/tmp/
-!cygwin_64/tmp/
+!tests/sim/_tsdz2.cdef
+
+# releases/ intentionally tracks curated .hex/.bin build artifacts, so
+# re-include it (and everything under it) despite the patterns above.
+!releases/
+!releases/**

@@ -1,0 +1,70 @@
+.card {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.9rem 1.1rem 1.1rem;
+  margin-bottom: 1rem;
+}
+
+.card-disabled {
+  opacity: 0.45;
+}
+
+.card h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.95rem;
+  margin-bottom: 0.3rem;
+  color: var(--accent-2);
+}
+
+.icon-danger {
+  color: var(--red);
+}
+
+.flash-status {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.88rem;
+  opacity: 0.85;
+}
+
+.flash-status-error {
+  color: var(--red);
+  font-weight: 600;
+  opacity: 1;
+}
+
+.flash-status-warn {
+  color: var(--amber);
+  font-weight: 600;
+  opacity: 1;
+}
+
+.flash-status-success {
+  color: var(--success);
+  font-weight: 600;
+  opacity: 1;
+}
+
+.flash-log {
+  white-space: pre-wrap;
+  font-size: 0.8rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  background: var(--surface-tint-strong);
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.7rem;
+  margin: 0.5rem 0 0;
+}
+
+.flash-log:empty {
+  display: none;
+}
+
+.subtitle {
+  opacity: 0.75;
+  font-size: 0.85rem;
+  max-width: 40rem;
+}

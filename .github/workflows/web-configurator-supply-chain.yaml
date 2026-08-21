@@ -1,0 +1,53 @@
+name: Web Configurator - Supply Chain Security
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "tools/web_configurator/package.json"
+      - "tools/web_configurator/package-lock.json"
+  pull_request:
+    paths:
+      - "tools/web_configurator/package.json"
+      - "tools/web_configurator/package-lock.json"
+  # Weekly scan to catch newly disclosed CVEs against pinned deps
+  schedule:
+    - cron: "0 6 * * 1"
+
+defaults:
+  run:
+    working-directory: tools/web_configurator
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/web_configurator/package-lock.json
+
+      # --- Step 1: install deps through Socket Firewall ---
+      # sfw blocks known-malicious packages at install time using Socket's
+      # public malware database (no API key required). Inherits
+      # ignore-scripts=true from .npmrc.
+      - name: Install dependencies via sfw
+        run: npx --yes sfw npm ci
+
+      # --- Step 2: behavioral / obfuscation scan ---
+      # Detects obfuscated payloads, credential stealers, conditional triggers
+      # (time-based / CI-aware), sandbox evasion, and worm propagation.
+      # Fails the job on any high or critical finding.
+      # Runs entirely locally - zero telemetry.
+      - name: Behavioral malware scan (@lateos/npm-scan)
+        run: npx --yes @lateos/npm-scan scan-lockfile --fail-on critical
+
+      # --- Step 3: known CVE scan (OSV database, fully offline) ---
+      # cve-lite fetches OSV advisories on first run and caches them locally.
+      # Correct usage: cve-lite [projectPath] - auto-detects package-lock.json.
+      - name: CVE scan (cve-lite)
+        run: npx --yes cve-lite-cli .
