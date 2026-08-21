@@ -43,3 +43,8 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: tools/web_configurator
           command: deploy
+          # Not a devDependency here, so the action falls back to an old
+          # pinned default (3.90.0) that doesn't support assets-only Workers
+          # (no `main` - see wrangler.jsonc) and fails with "Missing
+          # entry-point". Pin to a real current release instead.
+          wranglerVersion: "4"
