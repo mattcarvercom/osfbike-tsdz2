@@ -1,0 +1,45 @@
+name: Deploy flash.osf.bike
+
+# push-only, no pull_request trigger - this only ever runs after a merge to
+# master (which itself requires a reviewed PR, branch protection), never on
+# an unmerged PR from anyone (fork or not). Deliberate: avoids the "runs on
+# any opened PR" surface Cloudflare's own Workers Builds Git integration has
+# - see PR #2's discussion for the full reasoning.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "tools/web_configurator/**"
+      - ".github/workflows/deploy-flash.yaml"
+
+concurrency:
+  group: deploy-flash-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/web_configurator/package-lock.json
+
+      - name: Install dependencies
+        working-directory: tools/web_configurator
+        run: npm ci
+
+      - name: Build
+        working-directory: tools/web_configurator
+        run: npm run build
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: tools/web_configurator
+          command: deploy

@@ -8,7 +8,7 @@ on:
         default: 'warning'
   push:
     paths:
-    - ".github/workflows/*"
+    - ".github/workflows/build.yaml"
     - "firmwares/motor/tsdz2/src/*"
     - "tests/*"
     - "pyproject.toml"
