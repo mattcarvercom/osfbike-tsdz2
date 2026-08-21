@@ -1,0 +1,10 @@
+{
+  "name": "osfbike-tsdz2-flash",
+  "compatibility_date": "2026-08-21",
+  "assets": {
+    "directory": "./dist"
+  },
+  "routes": [
+    { "pattern": "flash.osf.bike", "custom_domain": true }
+  ]
+}
