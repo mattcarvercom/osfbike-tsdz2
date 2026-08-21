@@ -1,0 +1,64 @@
+.assist-chart {
+  margin-bottom: 0.7rem;
+}
+
+.assist-chart-bars {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  height: 4.5rem;
+  padding-top: 1.2rem; /* room for the value label sitting above each bar */
+}
+
+.assist-chart-bar {
+  position: relative;
+  flex: 1;
+  min-height: 2px;
+  background: var(--accent);
+  border-radius: 0.25rem 0.25rem 0 0;
+  opacity: 0.75;
+}
+
+.assist-chart-bar-l5 {
+  background: var(--accent-2);
+  opacity: 0.9;
+}
+
+.assist-chart-bar-warn {
+  background: var(--red);
+  opacity: 0.9;
+}
+
+.assist-chart-value {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.68rem;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+.assist-chart-labels {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+.assist-chart-labels span {
+  flex: 1;
+  text-align: center;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.6;
+}
+
+.assist-chart-labels span.assist-chart-bar-l5 {
+  background: none;
+  opacity: 0.9;
+  color: var(--accent-2);
+  font-weight: 600;
+}

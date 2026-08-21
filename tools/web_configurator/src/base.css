@@ -1,0 +1,69 @@
+/* Global reset + design tokens - the only stylesheet imported from main.ts
+   directly. Everything else lives next to the render/*.ts (or dom.ts) file
+   whose markup it styles, imported from there instead, so a PR touching one
+   component's CSS only touches that component's file. See dom.css for the
+   shared icon/toolbar/toggle-group primitives - genuinely reusable widgets,
+   as opposed to this file's true global reset/tokens. */
+
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  --border: #8888;
+  --accent: #4a7dbf;
+  --accent-2: #2c8c82;
+  --success: #2e7d32;
+  --surface-tint: rgba(128, 128, 128, 0.06);
+  --surface-tint-strong: rgba(128, 128, 128, 0.12);
+  --amber: #b26a00;
+  --red: #c62828;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #6d9fdb;
+    --accent-2: #4dbfb2;
+    --success: #66bb6a;
+    --amber: #ffb74d;
+    --red: #ef5350;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-size: 15px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+/* Utility hide, used by every component to toggle a node's visibility
+   in place without a full re-render (see e.g. render/control.ts's
+   markChanged()). !important, not just the plain 1-class specificity its
+   selector implies: several components (.unsaved-status among them) set
+   their own `display` at the same 1-class specificity, and this file is
+   just one piece of the bundle now rather than guaranteed-last in a single
+   style.css - !important makes "hidden always wins" independent of import
+   order, the same reasoning .sidebar-dot's own !important already uses in
+   render/sidebar.css. */
+.hidden {
+  display: none !important;
+}

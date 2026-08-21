@@ -9,19 +9,23 @@ on:
   push:
     paths:
     - ".github/workflows/*"
-    - "src/*"
+    - "firmwares/motor/tsdz2/src/*"
     - "tests/*"
     - "pyproject.toml"
     - "setup.py"
   pull_request:
     paths:
-    - "src/*"
+    - "firmwares/motor/tsdz2/src/*"
     - "tests/*"
     - "pyproject.toml"
     - "setup.py"
 
 env:
-  SDCC_VERSION: 4.4.0
+  SDCC_VERSION: 4.5.0
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   Build_Windows:
@@ -34,7 +38,7 @@ jobs:
       #     SSH_PASS: ${{ secrets.SSH_PASS }}
     - name: Install SDCC
       run: |
-        Invoke-WebRequest -UserAgent "Wget" -Uri https://sourceforge.net/projects/sdcc/files/sdcc-win64/$env:SDCC_VERSION/sdcc-$env:SDCC_VERSION-rc3-x64-setup.exe/download -OutFile sdcc_setup.exe
+        Invoke-WebRequest -UserAgent "Wget" -Uri https://sourceforge.net/projects/sdcc/files/sdcc-win64/$env:SDCC_VERSION/sdcc-$env:SDCC_VERSION-x64-setup.exe/download -OutFile sdcc_setup.exe
         Start-Process -wait -FilePath "sdcc_setup.exe" -ArgumentList "/S", "/D=C:\Program Files\SDCC"
         echo "Adding SDCC to PATH"
         Add-Content $env:GITHUB_PATH "C:\Program Files\SDCC\bin"
@@ -45,19 +49,26 @@ jobs:
         python-version: '3.x'
     # this mainly checks whether tests compile and work on windows. The actual test report runs on Ubuntu job
     - name: Check testing framework
+      env:
+        PYTHONUTF8: 1
       run: |
         pip install -e .
         rm tests/sim/_tsdz2.cdef # make sure cdef is generated from the source to check testing framework
         pytest --collect-only
     - name: Build
       run: |
-        cd src
+        # No more tools/cygwin_64/ - that was the legacy Java-configurator
+        # toolchain, removed from this fork on 2026-08-12 (see
+        # tools/CLAUDE.md). SDCC's own Windows installer bundles a compatible
+        # objcopy as sdobjcopy.exe in its own bin/, already on PATH from the
+        # "Install SDCC" step above.
+        cd firmwares/motor/tsdz2/src
         make clean
-        make CFLAGS=--Werror -j4
+        make OBJCOPY=sdobjcopy CFLAGS=--Werror -j4
     - uses: actions/upload-artifact@v4
       with:
         name: firmware_from_windows
-        path: bin/main.hex
+        path: firmwares/motor/tsdz2/bin/main.hex
 
   Build_Linux:
     runs-on: ubuntu-latest
@@ -79,17 +90,76 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: |
-          cd src
+          cd firmwares/motor/tsdz2/src
           make clean
           make CFLAGS=--Werror -j4
       - uses: actions/upload-artifact@v4
         with:
           name: firmware_from_linux
-          path: bin/main.hex
+          path: firmwares/motor/tsdz2/bin/main.hex
+
+
+  Static-analysis:
+    runs-on: ubuntu-latest
+    # No empirical runtime yet - this job (cppcheck built from source, then
+    # --check-level=exhaustive --enable=all over the whole firmware tree) has
+    # never actually run to completion before (earlier pushes on this branch
+    # kept getting cancelled mid-run by the concurrency group above). 30 min
+    # is a guess at a generous ceiling; tighten once a real duration is known.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare cppcheck
+        run: |
+          mkdir -p b
+          git clone https://github.com/danmar/cppcheck.git
+          cd cppcheck
+          git fetch --all --tags --force
+          git checkout 2.14.2
+          mkdir -p build
+      - name: Cache Cppcheck build
+        id: cppcheck-build
+        uses: actions/cache@v4
+        env:
+          cache-name: cppcheck-build
+        with:
+          path: ./cppcheck/build
+          key: ${{ runner.os }}-cppcheck-build-${{ env.cache-name }}-${{ hashFiles('cli/*.*') }}
+          restore-keys: |
+            ${{ runner.os }}-cppcheck-build-${{ env.cache-name }}-
+            ${{ runner.os }}-cppcheck-build-
+            ${{ runner.os }}-
+      - name: Install cppcheck
+        shell: bash
+        run: |
+          cd cppcheck/build
+          cmake ..
+          cmake --build .
+          sudo make install
+          cppcheck --version
+      - name: Cache Cppcheck dumps
+        id: cppcheck-dump-dir
+        uses: actions/cache@v4
+        env:
+          cache-name: cppcheck-build-dir
+        with:
+          path: ./b
+          key: ${{ runner.os }}-cppcheck-dump-dir-${{ env.cache-name }}-${{ hashFiles('firmwares/motor/tsdz2/src/**/*.{c,h}') }}
+          restore-keys: |
+            ${{ runner.os }}-cppcheck-dump-dir-${{ env.cache-name }}-
+            ${{ runner.os }}-cppcheck-dump-dir-
+            ${{ runner.os }}-
+      - name: Run cppcheck
+        shell: bash
+        run: |
+          cppcheck firmwares/motor/tsdz2/src --cppcheck-build-dir=b -j8 --enable=all --check-level=exhaustive --force --std=c99 -Ifirmwares/motor/tsdz2/src/STM8S_StdPeriph_Lib/inc -iSTM8S_StdPeriph_Lib --suppress=missingIncludeSystem --suppress=variableScope  -DSTM8S105 -DHSE_Value=16000000 -D_SDCC_ -DUSE_STDPERIPH_DRIVER -USTM8AF52Ax -USTM8AF622x -USTM8AF626x -USTM8AF62Ax -USTM8S003 -USTM8S005 -USTM8S007 -USTM8S103 -USTM8S207 -USTM8S208 -USTM8S903 -U__CSMC__ -U__ICCSTM8__ -U__RCST7__ -U__CDT_PARSER__  -URAM_EXECUTION -UHALL_DEBUG -UTIME_DEBUG  -UUSE_FULL_ASSERT 2>/dev/null
 
 
   Tests:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
@@ -138,13 +208,19 @@ jobs:
       - name: Collect coverage data
         run: |
           echo "### Coverage Report" >> $GITHUB_STEP_SUMMARY
-          gcovr -r tests --print-summary >> $GITHUB_STEP_SUMMARY
+          # --gcov-ignore-errors=all: the 860C UART test module compiles from a
+          # tempfile.mkdtemp() scratch dir (see tests/test_860c_uart.py) that's
+          # already gone by the time this step runs, so gcovr can't resolve its
+          # .gcda's embedded source paths - without this it hard-fails instead
+          # of just reporting 0% for that one file and moving on.
+          gcovr -r tests --gcov-ignore-errors=all --print-summary >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         with:
           name: coverage_report
           path: |
             tests/coverage_report.html
+
 
   Compare_builds:
     needs: [Build_Windows, Build_Linux]

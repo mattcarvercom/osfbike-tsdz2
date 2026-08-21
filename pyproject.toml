@@ -17,6 +17,11 @@ dependencies = [
     "setuptools",
     "numpy",
     "hypothesis",
+    # pinned below 3.0: load_c_code.py imports pycparser.plyparser, which
+    # pycparser 3.0 removed/renamed - resolving to 3.0 as a transitive cffi
+    # dep silently breaks the whole native test harness (tests/conftest.py
+    # fails to import) with no indication why
+    "pycparser <3.0",
 ]
 
 [project.urls]

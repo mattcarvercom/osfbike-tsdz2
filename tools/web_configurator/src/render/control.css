@@ -1,0 +1,464 @@
+/* ---- Singleton fields (renderControl) ------------------------------------ */
+
+.field {
+  border-bottom: 1px solid var(--surface-tint-strong);
+}
+
+.field:last-child {
+  border-bottom: none;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0;
+  font-size: 0.88rem;
+  /* Matches this row's own top+bottom padding (0.45rem x2) plus the explicit
+     height set on its number/text/select inputs below (1.9rem), so a
+     checkbox-only row (no input to stretch it) renders the same total
+     height instead of collapsing to the checkbox's native size. */
+  min-height: 2.8rem;
+}
+
+/* Assist level 5 percent's row: label + a run of computed-value badges +
+   a narrower input can genuinely overflow a narrow viewport/sidebar-open
+   layout where the plain field-row's no-wrap assumption is fine for every
+   other field (label + one short input). */
+.field-row-wrap {
+  flex-wrap: wrap;
+}
+
+.field-row input.assist5-input {
+  width: 4.5rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.assist5-computed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  justify-content: flex-end;
+}
+
+.assist5-badge {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.3rem;
+  background: var(--surface-tint-strong);
+  white-space: nowrap;
+}
+
+.assist5-badge-warn {
+  background: transparent;
+  border: 1px solid var(--red);
+  color: var(--red);
+  font-weight: 600;
+}
+
+.field-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+}
+
+.field-label .required,
+.field-group-header .required {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* A disabled required field (dependsOn currently false) isn't something to
+   fill in right now - red still reads as urgent even dimmed by
+   .field-disabled's opacity (red recedes far less than white/grey text at
+   the same opacity against a dark background), which undercuts the signal
+   for the fields where it does apply. Same specificity as the rule above
+   (two classes each), so source order - this coming after - is what makes
+   it win. */
+.field-disabled .required {
+  color: inherit;
+  font-weight: inherit;
+}
+
+/* Non-checkbox rows: label text is clickable to toggle help (see
+   renderLabel's own comment) - hinted with a pointer cursor, same as the
+   "?" button next to it, since the surrounding row whitespace deliberately
+   isn't. */
+.field-label-text-clickable {
+  cursor: pointer;
+}
+
+.field-row input[type="number"],
+.field-row input[type="text"],
+.field-row select {
+  width: 8rem;
+  height: 1.9rem;
+  padding: 0.25rem 0.4rem;
+}
+
+/* Slide toggle instead of a native checkbox square - same underlying
+   <input type="checkbox"> (keeps click/keyboard/label-forwarding semantics
+   and render/control.ts's `.checked` handling unchanged), just visually
+   replaced via appearance:none + a painted track/thumb. WebUSB gates this
+   whole app to Chromium anyway, so relying on Chromium's long-standing
+   support for ::before/::after on an appearance:none checkbox (outside the
+   letter of the CSS spec for replaced elements, but universally supported
+   there) is safe without a fallback. Shared with .field-group-cell (repeater
+   card checkboxes, render/control-group.css) since it's the exact same
+   widget in a narrower cell. */
+.field-row input[type="checkbox"],
+.field-group-cell input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 2.15rem;
+  height: 1.2rem;
+  flex: none;
+  margin: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-tint-strong);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.field-row input[type="checkbox"]::before,
+.field-group-cell input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s ease;
+}
+
+.field-row input[type="checkbox"]:checked,
+.field-group-cell input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.field-row input[type="checkbox"]:checked::before,
+.field-group-cell input[type="checkbox"]:checked::before {
+  transform: translateX(0.95rem);
+}
+
+.field-row input[type="checkbox"]:focus-visible,
+.field-group-cell input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.field-row input[type="checkbox"]:disabled,
+.field-group-cell input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+/* Standalone intSelect fields with long option text (IntSelectControl.fullWidth
+   in ui-model.ts, e.g. Lights configuration on power-on) - label above, select
+   below at full width, instead of the generic same-line fixed-8rem layout
+   that clips long option text. */
+.field-row.field-row-column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+.field-row.field-row-column select {
+  width: 100%;
+}
+
+.field-row input:disabled,
+.field-row select:disabled {
+  cursor: not-allowed;
+}
+
+.field-disabled {
+  opacity: 0.45;
+}
+
+.field-changed .field-row,
+.field-group-cell.field-changed {
+  background: rgba(178, 106, 0, 0.12);
+  border-radius: 0.3rem;
+}
+
+.field-changed .field-row {
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+  margin-left: -0.4rem;
+  margin-right: -0.4rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .field-changed .field-row,
+  .field-group-cell.field-changed {
+    background: rgba(255, 183, 77, 0.16);
+  }
+}
+
+/* A value the firmware genuinely cannot store (see rangeError() in
+   render/control.ts) - distinct red, always visible, not just an on-hover/
+   changed-state tint, since this means the field won't build/flash
+   correctly as-is. */
+.field-invalid .field-row input {
+  border-color: var(--red);
+  outline: 1px solid var(--red);
+}
+
+.field-error {
+  color: var(--red);
+  font-size: 0.78rem;
+  padding: 0.15rem 0 0.4rem;
+}
+
+/* Advisory, not an error (see Control.hint in ui-model.ts) - amber like the
+   sidebar's unsaved-changes indicator, not red like .field-error, since
+   nothing here is actually wrong or unbuildable. Icon-prefixed (infoCircle) -
+   see dom.ts's ICONS comment on the info/exclamation-circle pair. */
+.field-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  color: var(--amber);
+  font-size: 0.78rem;
+  padding: 0.15rem 0 0.4rem;
+}
+
+.field-hint .icon,
+.field-safety-warning .icon,
+.field-note-box .icon {
+  margin-top: 0.1rem;
+}
+
+/* Genuine physical-safety concern (see Control.safetyWarning in ui-model.ts),
+   not an ordinary "won't have its documented effect" advisory - red like
+   .field-error and a bordered box like .page-note, so it stands out from the
+   plain amber .field-hint line above it instead of blending in.
+   Icon-prefixed (exclamationCircle). */
+.field-safety-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  border: 1px solid var(--red);
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.7rem;
+  margin: 0.3rem 0 0.4rem;
+  font-size: 0.8rem;
+  color: var(--red);
+}
+
+/* Pro mode's own warning (render/pro-mode.ts) - louder than an ordinary
+   .field-safety-warning (thicker border, bold text, a faint red background
+   tint like .field-changed's amber tint) since this isn't about one field,
+   it's "this whole tool's disabled-field guardrails are off right now". */
+.pro-mode-warning {
+  border-width: 2px;
+  font-weight: 600;
+  background: rgba(198, 40, 40, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .pro-mode-warning {
+    background: rgba(239, 83, 80, 0.14);
+  }
+}
+
+/* Context needed *before* this field (see Control.noteBefore in
+   control-types.ts) - same bordered-box treatment as .field-safety-warning
+   so it reads as its own standalone note rather than blending into whatever
+   field sits above it, but amber (infoCircle) since this is advisory, not a
+   safety concern. */
+.field-note-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  border: 1px solid var(--amber);
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.7rem;
+  margin: 0.3rem 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--amber);
+}
+
+.field-group-cell input.field-invalid-input {
+  border-color: var(--red);
+  outline: 1px solid var(--red);
+}
+
+.help-toggle {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  line-height: 1;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  font-size: 0.7rem;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.help-toggle:hover,
+.help-toggle[aria-expanded="true"] {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+/* Small icon-only button next to any changed field - reverts just that one
+   field to its baseline value. Amber to match the "changed" tint/dot used
+   everywhere else in the app (sidebar-dot, .field-changed background), so
+   the two read as the same concept: this field differs from what's saved.
+   Reused as-is (same class) by render/topbar.ts's notes/loaded-file revert
+   buttons - genuinely the same widget, not a lookalike. */
+.revert-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  padding: 0;
+  border: 1px solid var(--amber);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--amber);
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.revert-btn:hover {
+  opacity: 1;
+  background: var(--amber);
+  color: #fff;
+}
+
+/* The notes revert button (render/topbar.ts's renderNotesRow()) sits inside
+   the topbar's `.toolbar topbar-actions` div alongside Import/Load/Save/
+   Reset - dom.css's `.toolbar button` rule (a class+type selector, higher
+   specificity than `.revert-btn` alone) was winning on padding/border-radius,
+   stretching this one revert button into a squarish 0.4rem-rounded rect with
+   an off-center icon instead of the small circle every other revert button
+   (this one's field-level siblings, and the loaded-file-rename-btn, neither
+   living inside a `.toolbar`) gets. Re-asserted here at matching specificity
+   (two classes) to win regardless of source order - same technique dom.css's
+   own `.toolbar button.btn-*` rule already uses for the same reason. */
+.toolbar .revert-btn {
+  padding: 0;
+  border-radius: 50%;
+}
+
+.field-help {
+  margin: 0 0 0.4rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  background: var(--surface-tint-strong);
+  border-radius: 0.3rem;
+}
+
+.field-help p {
+  margin: 0 0 0.4rem;
+}
+
+.field-help ul {
+  margin: 0 0 0.4rem;
+  padding-left: 1.1rem;
+}
+
+.field-help li {
+  margin: 0.1rem 0;
+}
+
+.field-help p:last-child,
+.field-help ul:last-child {
+  margin-bottom: 0;
+}
+
+.field-help strong {
+  font-weight: 600;
+}
+
+/* Informational only (see kmhX10ToMph in speed-units.ts) - deliberately not
+   amber/red like .field-hint/.field-error, since nothing here is advisory or
+   wrong. Shared with render/control-group.css's repeater cells - the same
+   mph side-note, just in a narrower cell there. */
+.field-mph-hint {
+  font-size: 0.72rem;
+  opacity: 0.6;
+}
+
+/* ---- Slider + number combo (fields whose tooltip states a real bound) --- */
+
+.field-slider-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.field-slider-track {
+  position: relative;
+  flex: 1;
+  max-width: 12rem;
+  display: flex;
+}
+
+.field-row .field-slider-wrap input[type="range"] {
+  flex: 1;
+  max-width: 12rem;
+  accent-color: var(--accent);
+}
+
+/* Decorative boundary line on a slider track (NumberControl.dangerAbove) -
+   marks where the field's documented bound stops being a hard firmware
+   ceiling. Sized/positioned to roughly land on the native range input's
+   own track, not its thumb - close enough for a decorative marker without
+   reimplementing the browser's own range-track geometry. */
+.field-slider-danger-line {
+  position: absolute;
+  top: 15%;
+  bottom: 15%;
+  left: 0;
+  width: 2px;
+  background: var(--red);
+  pointer-events: none;
+}
+
+.field-row .field-slider-wrap input[type="number"] {
+  width: 4.5rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.field-slider-mark {
+  flex: none;
+  border: 1px solid var(--accent-2);
+  color: var(--accent-2);
+  background: transparent;
+  border-radius: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.field-slider-mark:hover:not(:disabled) {
+  background: var(--accent-2);
+  color: #fff;
+}
+
+.field-slider-mark:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}

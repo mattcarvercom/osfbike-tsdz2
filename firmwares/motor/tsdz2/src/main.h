@@ -1,0 +1,731 @@
+/*
+ * TongSheng TSDZ2 motor controller firmware/
+ *
+ * Copyright (C) Casainho, Leon, MSpider65 2021.
+ *
+ * Released under the GPL License, Version 3
+ */
+
+#ifndef MAIN_H_
+#define MAIN_H_
+
+#include <stdint.h>
+#include "config.h"
+#include "common.h"
+#include "timers.h"
+
+//#define TIME_DEBUG
+//#define HALL_DEBUG
+
+extern volatile uint8_t u8_isr_load_perc;
+
+//#define FW_VERSION 15 // mspider65
+
+/*---------------------------------------------------------
+ NOTE: regarding motor rotor offset
+
+ The motor rotor offset should be as close to 0 as
+ possible. You can try to tune with the wheel in the air,
+ full throttle and look at the batttery current. Adjust
+ for the lowest battery current possible.
+ ---------------------------------------------------------*/
+#define MOTOR_ROTOR_OFFSET_ANGLE  (uint8_t)3
+#define PHASE_ROTOR_ANGLE_30  (uint8_t)((uint8_t)21  + MOTOR_ROTOR_OFFSET_ANGLE - (uint8_t)64)
+#define PHASE_ROTOR_ANGLE_90  (uint8_t)((uint8_t)64  + MOTOR_ROTOR_OFFSET_ANGLE - (uint8_t)64)
+#define PHASE_ROTOR_ANGLE_150 (uint8_t)((uint8_t)107 + MOTOR_ROTOR_OFFSET_ANGLE - (uint8_t)64)
+#define PHASE_ROTOR_ANGLE_210 (uint8_t)((uint8_t)149 + MOTOR_ROTOR_OFFSET_ANGLE - (uint8_t)64)
+#define PHASE_ROTOR_ANGLE_270 (uint8_t)((uint8_t)192 + MOTOR_ROTOR_OFFSET_ANGLE - (uint8_t)64)
+#define PHASE_ROTOR_ANGLE_330 (uint8_t)((uint8_t)235 + MOTOR_ROTOR_OFFSET_ANGLE - (uint8_t)64)
+
+
+#define HALL_COUNTER_FREQ                               TIM3_FREQ_HZ // TIM3 is the Hall sensor timebase
+
+
+#ifndef PWM_FREQ
+//#define PWM_FREQ										18 // 18 Khz
+#define PWM_FREQ										19 // 19 Khz
+#endif
+// else defined to config.h (Java configurator)
+
+#if PWM_FREQ == 19
+// PWM related values
+#define PWM_COUNTER_MAX										420 // 16MHz / 840 = 19,047 KHz                                        107
+#define MIDDLE_SVM_TABLE									107 // svm table 19 Khz
+#define MIDDLE_PWM_COUNTER									107
+// wheel speed parameters
+#define OEM_WHEEL_SPEED_DIVISOR								384 // at 19 KHz
+#else
+// PWM related values
+#define PWM_COUNTER_MAX										444 // 16MHz / 888 = 18,018 KHz                                    110
+#define MIDDLE_SVM_TABLE									110 // svm table 18 Khz
+#define MIDDLE_PWM_COUNTER									110
+// wheel speed parameters
+#define OEM_WHEEL_SPEED_DIVISOR								363 // at 18 KHz
+#endif
+
+#define MOTOR_TASK_FREQ									((uint16_t)(F_CPU / (PWM_COUNTER_MAX*2))) // 55.5us (PWM period) 18 Khz
+
+/*---------------------------------------------------------
+ NOTE: regarding duty cycle (PWM) ramping
+
+ Do not change these values if not sure of the effects!
+
+ A lower value of the duty cycle inverse step will mean
+ a faster acceleration. Be careful not to choose too
+ low values for acceleration.
+ ---------------------------------------------------------*/
+
+// ramp up/down PWM cycles count
+#define PWM_DUTY_CYCLE_RAMP_UP_INVERSE_STEP_DEFAULT			(uint8_t)(MOTOR_TASK_FREQ/98)
+#define PWM_DUTY_CYCLE_RAMP_UP_INVERSE_STEP_MIN				(uint8_t)(MOTOR_TASK_FREQ/781)
+#define PWM_DUTY_CYCLE_RAMP_DOWN_INVERSE_STEP_DEFAULT		(uint8_t)(MOTOR_TASK_FREQ/260)
+#define PWM_DUTY_CYCLE_RAMP_DOWN_INVERSE_STEP_MIN			(uint8_t)(MOTOR_TASK_FREQ/1953)
+#define CRUISE_DUTY_CYCLE_RAMP_UP_INVERSE_STEP				(uint8_t)(MOTOR_TASK_FREQ/116)
+#define WALK_ASSIST_DUTY_CYCLE_RAMP_UP_INVERSE_STEP			(uint8_t)(MOTOR_TASK_FREQ/78)
+#define THROTTLE_DUTY_CYCLE_RAMP_UP_INVERSE_STEP_DEFAULT	(uint8_t)(MOTOR_TASK_FREQ/116)
+#define THROTTLE_DUTY_CYCLE_RAMP_UP_INVERSE_STEP_MIN		(uint8_t)(MOTOR_TASK_FREQ/390)
+
+#define MOTOR_OVER_SPEED_ERPS								((MOTOR_TASK_FREQ/29) < 656 ?  (MOTOR_TASK_FREQ/29) : 656) // motor max speed | 29 points for the sinewave at max speed (less than MOTOR_TASK_FREQ/29)
+#define MOTOR_SPEED_FIELD_WEAKENING_MIN						490 // 90 rpm
+#define ERPS_SPEED_OF_MOTOR_REENABLING						320 // 60 rpm
+
+#define MOTOR_POLE_PAIRS	                                    8U 		// 1 * RPS = MOTOR_POLE_PAIRS * ERPS// cadence sensor
+
+// foc angle multiplier
+#if MOTOR_TYPE
+// 36 volt motor
+#define FOC_ANGLE_MULTIPLIER								30
+
+//bemf 36V motor = 0.0806 V/(rad/s) = 0.5 V/(rev/s) = 0.0633 V/erps source:  https://avdweb.nl/solar-bike/hub-motor/efficiency-bldc-motor-tongsheng-tsdz2-and-astro-3205-compared
+#define K_BEMF_X1000                                        63U
+#define MOTOR_PHASE_RESISTANCE_20C_X1000                    188U  // 0.188 (assume measured at 20°C)
+
+#else
+// 48 volt motor
+#define FOC_ANGLE_MULTIPLIER								39
+
+//casainho said 48V motor has the same max speed (4000rpm) as 36V motor run at rated voltaegand, which indicates constant widniwngs fill factor, so the BEMF factor and resistance can be scaled by 48/36:
+//bemf 48V motor: 0.0633 * 48/36 = 0.0844 V/erps:
+#define K_BEMF_X1000                                        84U
+#define MOTOR_PHASE_RESISTANCE_20C_X1000                    250U  // 0.188*48/36 = 0.25 ohm
+#endif
+
+// Cold resistance at -40°C for feedforward overcurrent margin
+// Copper: R(T) = R_20°C * (1 + 0.00393 * (T - 20))
+// At -40°C: resistance_cold_factor = 1 - 0.00393 * 60 = 0.7642
+#define COPPER_ALPHA_X1000000          3930UL  // 0.00393 * 1000000
+#define COLD_TEMP_DELTA                 60UL    // |20°C - (-40°C)|
+#define RESISTANCE_COLD_FACTOR_X1000000 \
+    (1000000UL - COPPER_ALPHA_X1000000 * COLD_TEMP_DELTA)
+
+#define MOTOR_PHASE_COLD_RESISTANCE_X1000 \
+    ((uint8_t)(MOTOR_PHASE_RESISTANCE_20C_X1000 * RESISTANCE_COLD_FACTOR_X1000000 / 1000000UL))
+
+//Gearing - motor
+/*------------------------------------------------------------------------------
+The secondary has a 93T gear being driven by an 10T, 
+so it is an 9.3:1 reduction (the primary "blue gear" was 4.5:1), 
+for a total of 4.5 X 9.3 = 41.85:1
+https://www.electricbike.com/tsdz2-750w-mid-drive-torque-sensing
+---------------------------------------------------------------------------------*/
+#define MOTOR_GEAR_RATIO_X8 335U // 41.85
+
+// Wheel speed sensor
+#define MAX_PLAUSIBLE_WHEEL_SPEED_X10				800U
+#define WHEEL_SPEED_COUNTER_RESET					1U
+#define WHEEL_SPEED_COUNTER_MAX						UINT16_MAX
+#define WHEEL_SPEED_TICKS_STOP						UINT16_MAX
+
+
+// Wheel speed sensor
+#define WHEEL_SPEED_SENSOR_TICKS_COUNTER_MAX_SPEED        ((uint16_t)((uint32_t)WHEEL_PERIMETER * MOTOR_TASK_FREQ / (MAX_PLAUSIBLE_WHEEL_SPEED_X10 / 10U) * 60U / 1000U * 60U / 1000U))// small value - fast rotation
+
+// duty cycle
+#define PWM_DUTY_CYCLE_MAX									UINT8_MAX
+#define PWM_DUTY_CYCLE_BITS                                 8U
+#define PWM_DUTY_CYCLE_STARTUP								30    // Initial PWM Duty Cycle at motor startup
+
+// ----------------------------------------------------------------------------------------------------------------
+// ----------------------------------------------------------------------------------------------------------------
+
+/* Hall Sensors NOTE! - results after Hall sensor calibration experiment
+Dai test sulla calibrazione dei sensori Hall risulta che Trise - Tfall = 21 e cioè 84 us
+(1 Hall counter step = 4us).
+Quindi gli stati 6,3,5 (fronte di salita) vengono rilevati con un ritardo di 84us maggiore
+rispetto agli stati 2,1,4.
+Quindi per gli stati 6,3,5 va sommato 21 (21x4us=84us) al contatore Hall usato per l'interpolazione,
+visto che è partito con 84us di ritardo rispetto agli altri stati.
+In questo modo il contatore Hall viene allineato allo stesso modo per tutti gli stati, ma sarà
+comunque in ritardo di Tfall per tutti gli stati. Questo ritardo viene gestito con un ulteriore
+offset da sommare al contatore per tutti gli stati.
+Dai test effettuati risulta che Tfall vale circa 66us (16,5 step) a cui va sommato il ritardo fra							   
+la lettura del contatore Hall e la scrittura dei registri PWM che è sempre uguale a mezzo
+ciclo PWM (1/(19047*2) = 26,25us o 6,5 step).
+Quindi l'offset per gli stati 2,1,4 vale 23 (16,5+6,5) mentre per gli stati 6,3,5
+vale 44 (16,5+6,5+21).
+I test effettuati hanno inoltre calcolato che il riferimento angolare corretto non è 10 ma 4 step
+***************************************
+Test effettuato il 21/1/2021
+MOTOR_ROTOR_OFFSET_ANGLE:  10 -> 4
+HALL_COUNTER_OFFSET_DOWN:  8  -> 23
+HALL_COUNTER_OFFSET_UP:    29 -> 44
+****************************************
+*/
+#define MOTOR_TICKS_PER_REV                     (MOTOR_POLE_PAIRS * MOTOR_HALL_STATES) // per mechanical revolution
+
+#define MOTOR_HALL_STATES                       6U      // 6 states per electrical rotation (360°) for BLDC motors
+
+#define HALL_COUNTER_OFFSET_DOWN                (HALL_COUNTER_FREQ/MOTOR_TASK_FREQ/2 + 17)
+#define HALL_COUNTER_OFFSET_UP                  (HALL_COUNTER_OFFSET_DOWN + 21)
+#define FW_HALL_COUNTER_OFFSET_MAX              3 // 3*4=12us max time offset
+
+#define MOTOR_ROTOR_INTERPOLATION_MIN_ERPS      4U // 4 is minimum to turn of interpolation before ui16_hall_counter_total overflows at low speed
+
+// cadence sensor
+/*---------------------------------------------------------------------------
+ NOTE: regarding the cadence sensor
+
+ CADENCE_SENSOR_NUMBER_MAGNETS = 20, this is the number of magnets used for
+ the cadence sensor. Was validated on August 2018 by Casainho and jbalat
+
+ Cadence is calculated by counting how much time passes between two
+ transitions. Depending on if all transitions are measured or simply
+ transitions of the same kind it is important to adjust the calculation of
+ pedal cadence.
+*/
+#define CADENCE_SENSOR_NUMBER_MAGNETS				20U
+#define CADENCE_SENSOR_STATES                       4U      // There are two hal sensors and both can be On or Off
+
+#define CADENCE_TICKS_PER_REV       (CADENCE_SENSOR_NUMBER_MAGNETS * CADENCE_SENSOR_STATES)
+
+//expected motor hall state changes per cadence PAS state change
+#define MOTOR_HALL_TICKS_EVERY_CADENCE_TICK ((uint16_t)(MOTOR_TICKS_PER_REV * MOTOR_GEAR_RATIO_X8 / 8U / CADENCE_TICKS_PER_REV))  // 25.125 -> 25
+
+#define CADENCE_TICKS_STARTUP_RPM                   1U
+
+#define CADENCE_RPM_TICK_NUM						(MOTOR_TASK_FREQ * (60U / CADENCE_SENSOR_NUMBER_MAGNETS))
+#define CADENCE_RPS_TICK_NUM						(MOTOR_TASK_FREQ / CADENCE_SENSOR_NUMBER_MAGNETS)
+#define CADENCE_COUNTER_RESET						1U
+#define CADENCE_TICKS_STOP							(CADENCE_RPM_TICK_NUM + 1U) //add one to ensure the division with CADENCE_RPM_TICK_NUM gives 0RPM
+
+
+// adc torque offset gap value for error
+#define ADC_TORQUE_SENSOR_OFFSET_THRESHOLD		30
+
+// Torque sensor range values
+#define ADC_TORQUE_SENSOR_RANGE					(PEDAL_TORQUE_ADC_MAX - PEDAL_TORQUE_ADC_OFFSET)
+#define ADC_TORQUE_SENSOR_RANGE_TARGET	  		160
+
+// Torque sensor offset values
+#if TORQUE_SENSOR_CALIBRATED
+#define ADC_TORQUE_SENSOR_CALIBRATION_OFFSET    (((6 * ADC_TORQUE_SENSOR_RANGE) / ADC_TORQUE_SENSOR_RANGE_TARGET) + 1)
+#define ADC_TORQUE_SENSOR_MIDDLE_OFFSET_ADJ		(((20 * ADC_TORQUE_SENSOR_RANGE) / ADC_TORQUE_SENSOR_RANGE_TARGET) + 1)
+#define ADC_TORQUE_SENSOR_OFFSET_ADJ			(((PEDAL_TORQUE_ADC_OFFSET_ADJ * ADC_TORQUE_SENSOR_RANGE) / ADC_TORQUE_SENSOR_RANGE_TARGET) + 1)
+#else
+#define ADC_TORQUE_SENSOR_CALIBRATION_OFFSET    6
+#define ADC_TORQUE_SENSOR_MIDDLE_OFFSET_ADJ		20
+#define ADC_TORQUE_SENSOR_OFFSET_ADJ			PEDAL_TORQUE_ADC_OFFSET_ADJ
+#endif
+
+// if the adc pedal torque offset value is negative
+#if ADC_TORQUE_SENSOR_OFFSET_ADJ <= (ADC_TORQUE_SENSOR_MIDDLE_OFFSET_ADJ - ADC_TORQUE_SENSOR_CALIBRATION_OFFSET)
+// disable assistance without pedal rotation
+#undef MOTOR_ASSISTANCE_WITHOUT_PEDAL_ROTATION
+#define MOTOR_ASSISTANCE_WITHOUT_PEDAL_ROTATION 0
+// Torque sensor offset adj for eMTB
+#define ADC_TORQUE_SENSOR_OFFSET_ADJ_EMTB		((ADC_TORQUE_SENSOR_MIDDLE_OFFSET_ADJ - ADC_TORQUE_SENSOR_CALIBRATION_OFFSET)>>1)
+#else
+#define ADC_TORQUE_SENSOR_OFFSET_ADJ_EMTB		0
+#endif
+
+// adc torque range parameters for remapping
+#define ADC_TORQUE_SENSOR_DELTA_ADJ				(uint16_t)((ADC_TORQUE_SENSOR_MIDDLE_OFFSET_ADJ * 2) - ADC_TORQUE_SENSOR_CALIBRATION_OFFSET - ADC_TORQUE_SENSOR_OFFSET_ADJ)
+#define ADC_TORQUE_SENSOR_RANGE_INGREASE_X100	(uint16_t)((ADC_TORQUE_SENSOR_RANGE_TARGET * 50) / ADC_TORQUE_SENSOR_RANGE)
+#define ADC_TORQUE_SENSOR_ANGLE_COEFF			11
+#define ADC_TORQUE_SENSOR_ANGLE_COEFF_X10		(uint16_t)(ADC_TORQUE_SENSOR_ANGLE_COEFF * 10)
+
+#define ADC_TORQUE_SENSOR_RANGE_TARGET_MIN 		(uint16_t)((float)((ADC_TORQUE_SENSOR_RANGE_TARGET / 2) \
+* (((ADC_TORQUE_SENSOR_RANGE_TARGET / 2) / ADC_TORQUE_SENSOR_ANGLE_COEFF + ADC_TORQUE_SENSOR_ANGLE_COEFF) / ADC_TORQUE_SENSOR_ANGLE_COEFF)))
+
+#define ADC_TORQUE_SENSOR_RANGE_TARGET_MAX 		(uint16_t)((ADC_TORQUE_SENSOR_RANGE_TARGET_MIN * (100 + PEDAL_TORQUE_ADC_RANGE_ADJ)) / 100)
+
+// parameters of the adc torque step for human power calculation
+#define PEDAL_TORQUE_PER_10_BIT_ADC_STEP_BASE_X100	34 // base adc step for remapping
+#define WEIGHT_ON_PEDAL_FOR_STEP_CALIBRATION		24 // Kg
+#define PERCENT_TORQUE_SENSOR_RANGE_WITH_WEIGHT		75 // % of torque sensor range with weight
+#define ADC_TORQUE_SENSOR_TARGET_WITH_WEIGHT		(uint16_t)((ADC_TORQUE_SENSOR_RANGE_TARGET * PERCENT_TORQUE_SENSOR_RANGE_WITH_WEIGHT) / 100)
+
+#define ADC_TORQUE_SENSOR_DELTA_WITH_WEIGHT			(uint16_t)(((((ADC_TORQUE_SENSOR_TARGET_WITH_WEIGHT \
+* ADC_TORQUE_SENSOR_RANGE_TARGET_MIN) / ADC_TORQUE_SENSOR_RANGE_TARGET)	* (100 + PEDAL_TORQUE_ADC_RANGE_ADJ) / 100) \
+* (ADC_TORQUE_SENSOR_TARGET_WITH_WEIGHT - ADC_TORQUE_SENSOR_CALIBRATION_OFFSET + ADC_TORQUE_SENSOR_OFFSET_ADJ \
+- ((ADC_TORQUE_SENSOR_DELTA_ADJ * ADC_TORQUE_SENSOR_TARGET_WITH_WEIGHT) / ADC_TORQUE_SENSOR_RANGE_TARGET))) / ADC_TORQUE_SENSOR_TARGET_WITH_WEIGHT)
+
+#define PEDAL_TORQUE_PER_10_BIT_ADC_STEP_CALC_X100	(uint8_t)((uint16_t)(((WEIGHT_ON_PEDAL_FOR_STEP_CALIBRATION * 167) \
+/ ((ADC_TORQUE_SENSOR_DELTA_WITH_WEIGHT * ADC_TORQUE_SENSOR_RANGE_TARGET_MAX) \
+/ (ADC_TORQUE_SENSOR_RANGE_TARGET_MAX - (((ADC_TORQUE_SENSOR_RANGE_TARGET_MAX - ADC_TORQUE_SENSOR_DELTA_WITH_WEIGHT) * 10) \
+/ PEDAL_TORQUE_ADC_ANGLE_ADJ))) \
+* PEDAL_TORQUE_PER_10_BIT_ADC_STEP_ADV_X100) / PEDAL_TORQUE_PER_10_BIT_ADC_STEP_BASE_X100))
+
+// scale the torque assist target current
+#define TORQUE_ASSIST_FACTOR_DENOMINATOR			120
+
+// Reference voltage for torque modes, based on power
+#define POWER_BASED_REFERENCE_VOLTAGE_X10			(uint16_t)(POWER_BASED_REFERENCE_VOLTAGE * 10)
+
+// torque step mode
+#define TORQUE_STEP_DEFAULT							0 // not calibrated
+#define TORQUE_STEP_ADVANCED						1 // calibrated
+
+// adc current
+//#define ADC_10_BIT_BATTERY_EXTRACURRENT				38  //  6 amps
+#define ADC_10_BIT_BATTERY_EXTRACURRENT				50  //  8 amps
+//#define ADC_10_BIT_BATTERY_CURRENT_MAX				112	// 18 amps // 1 = 0.16 Amp
+//#define ADC_10_BIT_BATTERY_CURRENT_MAX				124	// 20 amps // 1 = 0.16 Amp
+#define ADC_10_BIT_BATTERY_CURRENT_MAX				136	// 22 amps // 1 = 0.16 Amp
+#define ADC_10_BIT_MOTOR_PHASE_CURRENT_MAX			187	// 30 amps // 1 = 0.16 Amp
+/*---------------------------------------------------------
+ NOTE: regarding ADC battery current max
+
+ This is the maximum current in ADC steps that the motor
+ will be able to draw from the battery. A higher value
+ will give higher torque figures but the limit of the
+ controller is 16 A and it should not be exceeded.
+ ---------------------------------------------------------*/
+
+// throttle ADC values
+//#define ADC_THROTTLE_MIN_VALUE					47
+//#define ADC_THROTTLE_MAX_VALUE					176
+
+/*---------------------------------------------------------
+ NOTE: regarding throttle ADC values
+
+ Max voltage value for throttle, in ADC 8 bits step,
+ each ADC 8 bits step = (5 V / 256) = 0.0195
+
+ ---------------------------------------------------------*/
+
+/* ---------------------------------------------------------------------------
+
+ NOTE: regarding the torque sensor output values
+
+ Torque (force) value needs to be found experimentaly.
+
+ One torque sensor ADC 10 bit step is equal to 0.38 kg
+
+ Force (Nm) = 1 Kg * 9.81 * 0.17 (0.17 = arm cranks size)
+ --------------------------------------------------------------------------*/
+
+// ADC battery voltage measurement
+#define BATTERY_VOLTAGE_PER_10_BIT_ADC_STEP_X1000		87  // conversion value verified with a cheap power meter
+
+/*---------------------------------------------------------
+ NOTE: regarding ADC battery voltage measurement
+
+ 0.344 per ADC 8 bit step:
+
+ 17.9 V -->  ADC 8 bits value  = 52;
+ 40 V   -->  ADC 8 bits value  = 116;
+
+ This signal is atenuated by the opamp 358.
+ ---------------------------------------------------------*/
+
+// ADC battery current measurement
+#define BATTERY_CURRENT_PER_10_BIT_ADC_STEP_X100		16  // 0.16A x 10 bit ADC step
+
+// for oem display
+
+// UART
+#if ENABLE_860C_LVGL_UART
+// CRC16 variable-length protocol: 88 = largest display->motor frame (CONFIGURATIONS),
+// 29 = display receive capacity (see firmwares/display/860C/common/include/uart.h).
+#define UART_RX_BUFFER_LEN   						88
+#define UART_TX_BUFFER_LEN							29
+#else
+// Fixed 7-byte frame, single-byte sum checksum (OEM VLCD5/VLCD6/XH18/850C/EKD01).
+#define UART_RX_BUFFER_LEN   						7
+#define UART_TX_BUFFER_LEN							9
+#endif
+#define RX_CHECK_CODE					(UART_RX_BUFFER_LEN - 1)															
+#define TX_CHECK_CODE					(UART_TX_BUFFER_LEN - 1)
+#define TX_STX										0x43
+#define RX_STX										0x59
+
+// ---------------------------------------------------------------------------
+// CRC16-based UART protocol for the 860C/850C display (ENABLE_860C_LVGL_UART).
+// Numeric values must match the reference implementation exactly
+// (emmebrusa/TSDZ2-Smart-EBike-860C) so an unmodified stock Color_LCD_860C
+// binary talks to this firmware correctly.
+// ---------------------------------------------------------------------------
+#define COMM_FRAME_TYPE_ALIVE						0
+#define COMM_FRAME_TYPE_STATUS						1
+#define COMM_FRAME_TYPE_PERIODIC					2
+#define COMM_FRAME_TYPE_CONFIGURATIONS				3
+#define COMM_FRAME_TYPE_FIRMWARE_VERSION			4
+
+#define MOTOR_INIT_STATE_RESET						0
+#define MOTOR_INIT_STATE_NO_INIT					1
+#define MOTOR_INIT_STATE_INIT_START_DELAY			2
+#define MOTOR_INIT_STATE_INIT_WAIT_DELAY			3
+#define MOTOR_INIT_OK								4
+
+#define MOTOR_INIT_STATUS_RESET						0
+#define MOTOR_INIT_STATUS_GOT_CONFIG				1
+#define MOTOR_INIT_STATUS_INIT_OK					2
+
+// Motor error state bitmask sent to the 860C/850C display (byte[19] of the
+// PERIODIC frame, byte[3] of the FIRMWARE_VERSION reply). Bit positions match
+// what firmwares/display/860C/common/src/mainscreen.c decodes. Prefixed M_ to
+// avoid clashing with this repo's single-value ERROR_* codes in this header.
+#define M_ERROR_NOT_INIT							1
+#define M_ERROR_TORQUE_SENSOR						(1 << 1)
+#define M_ERROR_CADENCE_SENSOR						(1 << 2)
+#define M_ERROR_MOTOR_BLOCKED						(1 << 3)
+#define M_ERROR_THROTTLE							(1 << 4)
+#define M_ERROR_FATAL								(1 << 5)
+#define M_ERROR_BATTERY_OVERCURRENT					(1 << 6)
+#define M_ERROR_SPEED_SENSOR						(1 << 7)
+
+// parameters for display data
+#if UNITS_TYPE          // 1 = mph and miles
+#define OEM_WHEEL_FACTOR							900
+#else                   // 0 = km/h and kilometer
+#define OEM_WHEEL_FACTOR							1435
+#endif
+#define MILES										1
+
+#define DATA_INDEX_ARRAY_DIM						6
+
+// delay function status (0.1 sec)
+#define DELAY_FUNCTION_STATUS			(uint8_t) (DELAY_MENU_ON / 2)
+
+// delay torque sensor calibration (25.0 sec)
+#define DELAY_TORQUE_CALIBRATION			250
+
+// display function status
+#define FUNCTION_STATUS_OFF							1
+#define FUNCTION_STATUS_ON				(uint8_t) (100 + DISPLAY_STATUS_OFFSET)
+#define DISPLAY_STATUS_OFFSET						5
+
+// assist level 
+#define OFF											0
+#define ECO											1
+#define TOUR										2
+#define SPORT										3
+#define TURBO										4
+
+// assist pedal level mask
+#define ASSIST_PEDAL_LEVEL0							0x10
+#define ASSIST_PEDAL_LEVEL1							0x40
+#define ASSIST_PEDAL_LEVEL2							0x02
+#define ASSIST_PEDAL_LEVEL3							0x04
+#define ASSIST_PEDAL_LEVEL4							0x08
+#define ASSIST_PEDAL_LEVEL5							0x80
+// assist pedal level 5
+#define BEFORE_ECO									1
+#define AFTER_TURBO									2
+
+// assist mode
+#define OFFROAD_MODE								0
+#define STREET_MODE									1
+
+// oem display fault & function code
+#define CLEAR_DISPLAY								0
+#define NO_FUNCTION									0
+#define NO_FAULT									0
+#define NO_ERROR                                  	0 
+
+// error codes
+#if ENABLE_EKD01
+#define ERROR_UNDERVOLTAGE							1  // E01 shared
+#define ERROR_OVERVOLTAGE							1  // E01 shared
+#define ERROR_TORQUE_SENSOR							2  // E02
+#define ERROR_CADENCE_SENSOR						13 // E13 instead of E03
+#define ERROR_MOTOR_BLOCKED							4  // E04
+#define ERROR_THROTTLE								10 // E10 instead of E05
+#define ERROR_OVERTEMPERATURE						6  // E06
+#define ERROR_BATTERY_OVERCURRENT					7  // E07
+#define ERROR_SPEED_SENSOR 							3  // E14 instead of E08
+#define ERROR_WRITE_EEPROM 							9  // E09 shared
+#define ERROR_MOTOR_CHECK 							9  // E09 shared
+#define ERROR_BATTERY_SAG							11 // E11 - informational only, doesn't disable the motor
+#else
+#define ERROR_UNDERVOLTAGE							1 // E01 shared
+#define ERROR_OVERVOLTAGE							1 // E01 (E06 blinking for XH18)
+#define ERROR_TORQUE_SENSOR                       	2 // E02
+#define ERROR_CADENCE_SENSOR			          	3 // E03
+#define ERROR_MOTOR_BLOCKED                       	4 // E04
+#define ERROR_THROTTLE								5 // E05 (E03 blinking for XH18)
+#define ERROR_OVERTEMPERATURE						6 // E06
+#define ERROR_BATTERY_OVERCURRENT                 	7 // E07 (E04 blinking for XH18)
+#define ERROR_SPEED_SENSOR							8 // E08
+#define ERROR_WRITE_EEPROM  					  	9 // E09 shared (E08 blinking for XH18)
+#define ERROR_MOTOR_CHECK                       	9 // E09 shared (E08 blinking for XH18)
+#define ERROR_BATTERY_SAG							11 // E11 - informational only, doesn't disable the motor
+#endif
+
+// optional ADC function
+#if ENABLE_TEMPERATURE_LIMIT && ENABLE_THROTTLE
+#define OPTIONAL_ADC_FUNCTION                 		NOT_IN_USE
+#elif ENABLE_TEMPERATURE_LIMIT
+#define OPTIONAL_ADC_FUNCTION                 		TEMPERATURE_CONTROL
+#elif ENABLE_THROTTLE && ENABLE_BRAKE_SENSOR
+#define OPTIONAL_ADC_FUNCTION                 		THROTTLE_CONTROL
+#else
+#define OPTIONAL_ADC_FUNCTION                 		NOT_IN_USE
+#endif
+
+// temperature sensor type
+#define LM35										0
+#define TMP36										1
+
+// throttle mode
+#define DISABLED									0
+#define PEDALING									1
+#define W_O_P_6KM_H_ONLY							2
+#define W_O_P_6KM_H_AND_PEDALING					3
+#define UNCONDITIONAL								4
+
+// wheel perimeter
+#define WHEEL_PERIMETER_0							(uint8_t) (WHEEL_PERIMETER & 0x00FF)
+#define WHEEL_PERIMETER_1							(uint8_t) ((WHEEL_PERIMETER >> 8) & 0x00FF)
+
+// BATTERY PARAMETER
+// battery low voltage cut off
+#define BATTERY_LOW_VOLTAGE_CUT_OFF_X10_0		(uint8_t) ((uint16_t)(BATTERY_LOW_VOLTAGE_CUT_OFF * 10) & 0x00FF)
+#define BATTERY_LOW_VOLTAGE_CUT_OFF_X10_1		(uint8_t) (((uint16_t)(BATTERY_LOW_VOLTAGE_CUT_OFF * 10) >> 8) & 0x00FF)
+// adc battery voltage for saving battery Soc% at shutdown
+#define ADC_10_BIT_BATTERY_VOLTAGE_SHUTDOWN		232 // 20 volt
+// battery voltage reset SOC percentage
+#define BATTERY_VOLTAGE_RESET_SOC_PERCENT_X10   (uint16_t)((float)LI_ION_CELL_RESET_SOC_PERCENT * (float)(BATTERY_CELLS_NUMBER * 10))
+// battery SOC eeprom value saved (8 bit)
+#define BATTERY_SOC								0
+// battery SOC% threshold x10 (15% volt calc)
+#define BATTERY_SOC_PERCENT_THRESHOLD_X10		150
+// SOC calculation
+#define SOC_CALC_AUTO							0
+#define SOC_CALC_WH								1
+#define SOC_CALC_VOLTS							2
+
+// cell bars
+#if ENABLE_VLCD6 || ENABLE_XH18
+#define BATTERY_SOC_OVERVOLTAGE_X10		(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_OVERVOLT * 10))
+#define BATTERY_SOC_VOLTS_SOC_RESET_X10	(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_RESET_SOC_PERCENT * 10))
+#define BATTERY_SOC_VOLTS_FULL_X10		(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_FULL * 10))
+#define BATTERY_SOC_VOLTS_3_X10			(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_3_OF_4 * 10))
+#define BATTERY_SOC_VOLTS_2_X10			(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_2_OF_4 * 10))
+#define BATTERY_SOC_VOLTS_1_X10			(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_1_OF_4 * 10))
+#define BATTERY_SOC_VOLTS_EMPTY_X10		(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_EMPTY * 10))
+#else // ENABLE_VLCD5 or ENABLE_850C or ENABLE_EKD01
+#define BATTERY_SOC_OVERVOLTAGE_X10		(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_OVERVOLT * 10))
+#define BATTERY_SOC_VOLTS_SOC_RESET_X10	(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_RESET_SOC_PERCENT * 10))
+#define BATTERY_SOC_VOLTS_FULL_X10		(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_FULL * 10))
+#define BATTERY_SOC_VOLTS_5_X10			(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_5_OF_6 * 10))
+#define BATTERY_SOC_VOLTS_4_X10			(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_4_OF_6 * 10))
+#define BATTERY_SOC_VOLTS_3_X10			(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_3_OF_6 * 10))
+#define BATTERY_SOC_VOLTS_2_X10			(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_2_OF_6 * 10))
+#define BATTERY_SOC_VOLTS_1_X10			(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_1_OF_6 * 10))
+#define BATTERY_SOC_VOLTS_EMPTY_X10		(uint16_t)(BATTERY_CELLS_NUMBER * ((float)LI_ION_CELL_VOLTS_EMPTY * 10))
+#endif
+
+// assist level 0
+#define TORQUE_ASSIST_LEVEL_0        0
+#define CADENCE_ASSIST_LEVEL_0       0
+#define EMTB_ASSIST_LEVEL_0          0
+#define WALK_ASSIST_LEVEL_0          0
+#define CRUISE_TARGET_SPEED_LEVEL_0  0
+
+// power assist level
+#define POWER_ASSIST_LEVEL_OFF       0
+#define POWER_ASSIST_LEVEL_ECO       (uint8_t)(POWER_ASSIST_LEVEL_1 / 2)
+#define POWER_ASSIST_LEVEL_TOUR      (uint8_t)(POWER_ASSIST_LEVEL_2 / 2)
+#define POWER_ASSIST_LEVEL_SPORT     (uint8_t)(POWER_ASSIST_LEVEL_3 / 2)
+#define POWER_ASSIST_LEVEL_TURBO     (uint8_t)(POWER_ASSIST_LEVEL_4 / 2)
+
+// walk assist
+#define WALK_ASSIST_THRESHOLD_SPEED_X10_DEFAULT	70
+#if WALK_ASSIST_THRESHOLD_SPEED_X10 > WALK_ASSIST_THRESHOLD_SPEED_X10_DEFAULT
+#define WALK_ASSIST_THRESHOLD_SPEED			(uint8_t)(WALK_ASSIST_THRESHOLD_SPEED_X10_DEFAULT / 10)
+#else
+#define WALK_ASSIST_THRESHOLD_SPEED			(uint8_t)(WALK_ASSIST_THRESHOLD_SPEED_X10 / 10)
+#endif
+#define WALK_ASSIST_WHEEL_SPEED_MIN_DETECT_X10	42
+#define WALK_ASSIST_ERPS_THRESHOLD				20
+#define WALK_ASSIST_ADJ_DELAY_MIN				4
+#define WALK_ASSIST_ADJ_DELAY_STARTUP			10
+#define WALK_ASSIST_DUTY_CYCLE_MIN              40
+#define WALK_ASSIST_DUTY_CYCLE_STARTUP			50
+#define WALK_ASSIST_DUTY_CYCLE_MAX              130
+#define WALK_ASSIST_ADC_BATTERY_CURRENT_MAX     40
+
+
+// cruise threshold (speed limit min km/h x10)
+#define CRUISE_THRESHOLD_SPEED_X10				(CRUISE_THRESHOLD_SPEED * 10)
+#define CRUISE_THRESHOLD_SPEED_X10_DEFAULT		80
+#define CRUISE_OFFROAD_THRESHOLD_SPEED_X10		(uint8_t)CRUISE_THRESHOLD_SPEED_X10
+#if CRUISE_THRESHOLD_SPEED_X10 < CRUISE_THRESHOLD_SPEED_X10_DEFAULT
+#define CRUISE_STREET_THRESHOLD_SPEED_X10		(uint8_t)(CRUISE_THRESHOLD_SPEED_X10_DEFAULT)
+#else
+#define CRUISE_STREET_THRESHOLD_SPEED_X10		(uint8_t)(CRUISE_THRESHOLD_SPEED_X10)
+#endif
+
+// cruise control override for walk assist ECO/TOUR/SPORT/TURBO - lets a
+// display with no lights button (e.g. DZ40, which can't reach the hidden
+// menu that normally selects CRUISE_MODE) borrow the walk-assist button at
+// any one or more individually-selected levels to trigger Cruise control's
+// real PID speed-hold instead of walk assist's own ramp. See
+// UNIVERSAL_FIRMWARE_PLAN.md's "Cruise control override for walk assist"
+// entry for the full design.
+#if (CRUISE_OVERRIDE_WALK_ECO_ENABLED || CRUISE_OVERRIDE_WALK_TOUR_ENABLED || CRUISE_OVERRIDE_WALK_SPORT_ENABLED || CRUISE_OVERRIDE_WALK_TURBO_ENABLED) && !CRUISE_MODE_ENABLED
+#error "CRUISE_OVERRIDE_WALK_*_ENABLED requires CRUISE_MODE_ENABLED - apply_cruise() (ebike_app.c) does nothing when it's off, so switching into CRUISE_MODE would leave the motor's duty cycle target unmanaged"
+#endif
+// Folds to a compile-time-constant false (dead code, zero size cost) when no
+// override is configured - deliberately a plain runtime boolean expression,
+// not further #if-gated, so the code that uses it (ebike_app.c) can stay
+// ordinary matched-brace C instead of splitting braces across preprocessor
+// conditionals. One line, no backslash continuation - no other macro in
+// this codebase uses that, and it tripped up the in-browser WASM mcpp
+// preprocessor (silently failed to expand it at all, so SDCC then saw a
+// call to an undeclared function - "too many parameters").
+#define CRUISE_OVERRIDE_ACTIVE_LEVEL(level) (((level) == ECO && CRUISE_OVERRIDE_WALK_ECO_ENABLED) || ((level) == TOUR && CRUISE_OVERRIDE_WALK_TOUR_ENABLED) || ((level) == SPORT && CRUISE_OVERRIDE_WALK_SPORT_ENABLED) || ((level) == TURBO && CRUISE_OVERRIDE_WALK_TURBO_ENABLED))
+
+// odometer compensation for displayed data (eeprom)
+#define ODOMETER_COMPENSATION					0
+// zero odometer compensation
+#define ZERO_ODOMETER_COMPENSATION				100000000
+
+#define ASSISTANCE_WITH_ERROR_ENABLED			0
+
+
+
+// *** ASSERT FOR THE AUTO-GENERATED CONFIG.H: ***
+_Static_assert((MOTOR_TYPE == 0) || (MOTOR_TYPE == 1), "Motor type must be 0 or 1");
+_Static_assert((TORQUE_SENSOR_CALIBRATED == 0) || (TORQUE_SENSOR_CALIBRATED == 1), "Torque sensor must be calibrated (0 or 1)");
+_Static_assert((MOTOR_ACCELERATION > 0) && (MOTOR_ACCELERATION <= 100), "Motor acceleration must be between 1 and 100");
+_Static_assert(MOTOR_DECELERATION > 0, "Motor deceleration must be greater than 0");
+_Static_assert((MOTOR_ASSISTANCE_WITHOUT_PEDAL_ROTATION == 0) || (MOTOR_ASSISTANCE_WITHOUT_PEDAL_ROTATION == 1), "Assistance without pedal rotation must be 0 or 1");
+_Static_assert(ASSISTANCE_WITHOUT_PEDAL_ROTATION_THRESHOLD > 0, "Assistance without pedal rotation threshold must be greater than 0");
+_Static_assert(PEDAL_TORQUE_PER_10_BIT_ADC_STEP_X100 > 0, "Pedal torque per 10-bit ADC step must be greater than 0");
+_Static_assert(PEDAL_TORQUE_ADC_MAX > 0, "Pedal torque ADC max must be greater than 0");
+_Static_assert(STARTUP_BOOST_TORQUE_FACTOR > 0, "Startup boost torque factor must be greater than 0");
+_Static_assert(MOTOR_BLOCKED_COUNTER_THRESHOLD > 0, "Motor blocked counter threshold must be greater than 0");
+_Static_assert(MOTOR_BLOCKED_BATTERY_CURRENT_THRESHOLD_X10 > 0, "Motor blocked battery current threshold must be greater than 0");
+_Static_assert(MOTOR_BLOCKED_ERPS_THRESHOLD > 0, "Motor blocked ERPS threshold must be greater than 0");
+_Static_assert(STARTUP_BOOST_CADENCE_STEP > 0, "Startup boost cadence step must be greater than 0");
+_Static_assert(BATTERY_CURRENT_MAX > 0, "Battery current max must be greater than 0");
+_Static_assert(TARGET_MAX_BATTERY_POWER > 0, "Target max battery power must be greater than 0");
+_Static_assert(TARGET_MAX_BATTERY_CAPACITY > 0, "Target max battery capacity must be greater than 0");
+_Static_assert(BATTERY_CELLS_NUMBER > 0, "Number of battery cells must be greater than 0");
+_Static_assert(BATTERY_LOW_VOLTAGE_CUT_OFF > 0, "Battery low voltage cut-off must be greater than 0");
+_Static_assert((ACTUAL_BATTERY_VOLTAGE_PERCENT >= 0) && (ACTUAL_BATTERY_VOLTAGE_PERCENT <= 100), "Actual battery voltage percent must be between 0 and 100");
+_Static_assert((ACTUAL_BATTERY_CAPACITY_PERCENT >= 0) && (ACTUAL_BATTERY_CAPACITY_PERCENT <= 100), "Actual battery capacity percent must be between 0 and 100");
+_Static_assert((int16_t)(float)(LI_ION_CELL_OVERVOLT * 100.0) > 0, "Li-ion cell overvoltage must be greater than 0");
+_Static_assert((int16_t)(float)(LI_ION_CELL_RESET_SOC_PERCENT * 100.0) > 0, "Li-ion cell reset SOC percent must be greater than 0");
+_Static_assert((int16_t)(float)(LI_ION_CELL_VOLTS_EMPTY * 100.0) >= 0, "Li-ion cell volts empty must be greater than 0");
+_Static_assert((int16_t)(float)(LI_ION_CELL_VOLTS_FULL * 100.0) > 0, "Li-ion cell volts full must be greater than 0");
+_Static_assert(WHEEL_PERIMETER > 0, "Wheel perimeter must be greater than 0");
+_Static_assert(WHEEL_MAX_SPEED > 0, "Wheel max speed must be greater than 0");
+_Static_assert((ENABLE_LIGHTS == 0) || (ENABLE_LIGHTS == 1), "Enable lights must be 0 or 1");
+_Static_assert((ENABLE_WALK_ASSIST == 0) || (ENABLE_WALK_ASSIST == 1), "Enable walk assist must be 0 or 1");
+_Static_assert((ENABLE_BRAKE_SENSOR == 0) || (ENABLE_BRAKE_SENSOR == 1), "Enable brake sensor must be 0 or 1");
+_Static_assert((ENABLE_THROTTLE == 0) || (ENABLE_THROTTLE == 1), "Enable throttle must be 0 or 1");
+_Static_assert((ENABLE_TEMPERATURE_LIMIT == 0) || (ENABLE_TEMPERATURE_LIMIT == 1), "Enable temperature limit must be 0 or 1");
+_Static_assert((ENABLE_STREET_MODE_ON_STARTUP == 0) || (ENABLE_STREET_MODE_ON_STARTUP == 1), "Enable street mode on startup must be 0 or 1");
+_Static_assert((ENABLE_SET_PARAMETER_ON_STARTUP == 0) || (ENABLE_SET_PARAMETER_ON_STARTUP == 1), "Enable set parameter on startup must be 0 or 1");
+_Static_assert((ENABLE_ODOMETER_COMPENSATION == 0) || (ENABLE_ODOMETER_COMPENSATION == 1), "Enable odometer compensation must be 0 or 1");
+_Static_assert((STARTUP_BOOST_ON_STARTUP == 0) || (STARTUP_BOOST_ON_STARTUP == 1), "Startup boost on startup must be 0 or 1");
+_Static_assert((TORQUE_SENSOR_ADV_ON_STARTUP == 0) || (TORQUE_SENSOR_ADV_ON_STARTUP == 1), "Torque sensor advanced on startup must be 0 or 1");
+_Static_assert(LIGHTS_CONFIGURATION_ON_STARTUP >= 0, "Lights configuration on startup must be non-negative");
+_Static_assert((STREET_MODE_POWER_LIMIT_ENABLED == 0) || (STREET_MODE_POWER_LIMIT_ENABLED == 1), "Street mode power limit enabled must be 0 or 1");
+_Static_assert(STREET_MODE_POWER_LIMIT > 0, "Street mode power limit must be greater than 0");
+_Static_assert(STREET_MODE_SPEED_LIMIT > 0, "Street mode speed limit must be greater than 0");
+_Static_assert(ADC_THROTTLE_MIN_VALUE >= 0, "ADC throttle min value must be non-negative");
+_Static_assert(ADC_THROTTLE_MAX_VALUE > ADC_THROTTLE_MIN_VALUE, "ADC throttle max value must be greater than min value");
+_Static_assert(MOTOR_TEMPERATURE_MIN_VALUE_LIMIT < MOTOR_TEMPERATURE_MAX_VALUE_LIMIT, "Motor temperature min limit must be less than max limit");
+_Static_assert((ENABLE_TEMPERATURE_ERROR_MIN_LIMIT == 0) || (ENABLE_TEMPERATURE_ERROR_MIN_LIMIT == 1), "Enable temperature error min limit must be 0 or 1");
+_Static_assert((ENABLE_VLCD6 == 0) || (ENABLE_VLCD6 == 1), "Enable VLCD6 must be 0 or 1");
+_Static_assert((ENABLE_VLCD5 == 0) || (ENABLE_VLCD5 == 1), "Enable VLCD5 must be 0 or 1");
+_Static_assert((ENABLE_XH18 == 0) || (ENABLE_XH18 == 1), "Enable XH18 must be 0 or 1");
+_Static_assert((ENABLE_860C_LVGL_UART == 0) || (ENABLE_860C_LVGL_UART == 1), "Enable 860C LVGL UART must be 0 or 1");
+_Static_assert((ENABLE_DISPLAY_WORKING_FLAG == 0) || (ENABLE_DISPLAY_WORKING_FLAG == 1), "Enable display working flag must be 0 or 1");
+_Static_assert((ENABLE_DISPLAY_ALWAYS_ON == 0) || (ENABLE_DISPLAY_ALWAYS_ON == 1), "Enable display always on must be 0 or 1");
+_Static_assert((ENABLE_WHEEL_MAX_SPEED_FROM_DISPLAY == 0) || (ENABLE_WHEEL_MAX_SPEED_FROM_DISPLAY == 1), "Enable wheel max speed from display must be 0 or 1");
+_Static_assert(DELAY_MENU_ON > 0, "Delay menu must be greater than 0");
+_Static_assert((COASTER_BRAKE_ENABLED == 0) || (COASTER_BRAKE_ENABLED == 1), "Enable coaster brake must be 0 or 1");
+_Static_assert(COASTER_BRAKE_TORQUE_THRESHOLD > 0, "Coaster brake torque threshold must be greater than 0");
+_Static_assert((ENABLE_AUTO_DATA_DISPLAY == 0) || (ENABLE_AUTO_DATA_DISPLAY == 1), "Enable auto data display must be 0 or 1");
+_Static_assert((STARTUP_ASSIST_ENABLED == 0) || (STARTUP_ASSIST_ENABLED == 1), "Startup assist must be 0 or 1");
+_Static_assert(DELAY_DISPLAY_DATA_1 >= 0, "Delay display data 1 must be non-negative");
+_Static_assert(DELAY_DISPLAY_DATA_2 >= 0, "Delay display data 2 must be non-negative");
+_Static_assert(DELAY_DISPLAY_DATA_3 >= 0, "Delay display data 3 must be non-negative");
+_Static_assert(DELAY_DISPLAY_DATA_4 >= 0, "Delay display data 4 must be non-negative");
+_Static_assert(DELAY_DISPLAY_DATA_5 >= 0, "Delay display data 5 must be non-negative");
+_Static_assert(DELAY_DISPLAY_DATA_6 >= 0, "Delay display data 6 must be non-negative");
+_Static_assert(DISPLAY_DATA_1 >= 0, "Display data 1 must be non-negative");
+_Static_assert(DISPLAY_DATA_2 >= 0, "Display data 2 must be non-negative");
+_Static_assert(DISPLAY_DATA_3 >= 0, "Display data 3 must be non-negative");
+_Static_assert(DISPLAY_DATA_4 >= 0, "Display data 4 must be non-negative");
+_Static_assert(DISPLAY_DATA_5 >= 0, "Display data 5 must be non-negative");
+_Static_assert(DISPLAY_DATA_6 >= 0, "Display data 6 must be non-negative");
+_Static_assert(POWER_ASSIST_LEVEL_1 > 0, "Power assist level 1 must be greater than 0");
+_Static_assert(POWER_ASSIST_LEVEL_2 >= POWER_ASSIST_LEVEL_1, "Power assist level 2 should be greater than power assist level 1");
+_Static_assert(POWER_ASSIST_LEVEL_3 >= POWER_ASSIST_LEVEL_2, "Power assist level 3 should be greater than power assist level 2");
+_Static_assert(POWER_ASSIST_LEVEL_4 >= POWER_ASSIST_LEVEL_3, "Power assist level 4 should be greater than power assist level 3");
+_Static_assert(TORQUE_ASSIST_LEVEL_1 > 0, "Torque assist level 1 should be greater than 0");
+_Static_assert(TORQUE_ASSIST_LEVEL_2 >= TORQUE_ASSIST_LEVEL_1, "Torque assist level 2 should be greater than torque assist level 1");
+_Static_assert(TORQUE_ASSIST_LEVEL_3 >= TORQUE_ASSIST_LEVEL_2, "Torque assist level 3 should be greater than torque assist level 2");
+_Static_assert(TORQUE_ASSIST_LEVEL_4 >= TORQUE_ASSIST_LEVEL_3, "Torque assist level 4 should be greater than torque assist level 3");
+_Static_assert(CADENCE_ASSIST_LEVEL_1 > 0, "Cadence assist level 1 should be greater than 0");
+_Static_assert(CADENCE_ASSIST_LEVEL_2 >= CADENCE_ASSIST_LEVEL_1, "Cadence assist level 2 should be greater than cadence assist level 1");
+_Static_assert(CADENCE_ASSIST_LEVEL_3 >= CADENCE_ASSIST_LEVEL_2, "Cadence assist level 3 should be greater than cadence assist level 2");
+_Static_assert(CADENCE_ASSIST_LEVEL_4 >= CADENCE_ASSIST_LEVEL_3, "Cadence assist level 4 should be greater than cadence assist level 3");
+_Static_assert(EMTB_ASSIST_LEVEL_1 > 0, "EMTB assist level 1 should be greater than 0");
+_Static_assert(EMTB_ASSIST_LEVEL_2 >= EMTB_ASSIST_LEVEL_1, "EMTB assist level 2 should be greater than EMTB assist level 1");
+_Static_assert(EMTB_ASSIST_LEVEL_3 >= EMTB_ASSIST_LEVEL_2, "EMTB assist level 3 should be greater than EMTB assist level 2");
+_Static_assert(EMTB_ASSIST_LEVEL_4 >= EMTB_ASSIST_LEVEL_3, "EMTB assist level 4 should be greater than EMTB assist level 3");
+_Static_assert(WALK_ASSIST_LEVEL_1 > 0, "Walk assist level 1 should be greater than 0");
+_Static_assert(WALK_ASSIST_LEVEL_2 >= WALK_ASSIST_LEVEL_1, "Walk assist level 2 should be greater than walk assist level 1");
+_Static_assert(WALK_ASSIST_LEVEL_3 >= WALK_ASSIST_LEVEL_2, "Walk assist level 3 should be greater than walk assist level 2");
+_Static_assert(WALK_ASSIST_LEVEL_4 >= WALK_ASSIST_LEVEL_3, "Walk assist level 4 should be greater than walk assist level 3");
+_Static_assert(WALK_ASSIST_THRESHOLD_SPEED_X10 > 0, "Walk assist threshold speed must be greater than 0");
+_Static_assert((WALK_ASSIST_DEBOUNCE_ENABLED == 0) || (WALK_ASSIST_DEBOUNCE_ENABLED == 1), "Walk assist debounce enabled must be 0 or 1");
+_Static_assert(WALK_ASSIST_DEBOUNCE_TIME >= 0, "Walk assist debounce time must be non-negative");
+_Static_assert(CRUISE_TARGET_SPEED_LEVEL_1 > 0, "Cruise target speed level 1 must be greater than 0");
+_Static_assert(CRUISE_TARGET_SPEED_LEVEL_2 >= CRUISE_TARGET_SPEED_LEVEL_1, "Cruise target speed level 2 should be greater than cruise target speed level 1");
+_Static_assert(CRUISE_TARGET_SPEED_LEVEL_3 >= CRUISE_TARGET_SPEED_LEVEL_2, "Cruise target speed level 3 should be greater than cruise target speed level 2");
+_Static_assert(CRUISE_TARGET_SPEED_LEVEL_4 >= CRUISE_TARGET_SPEED_LEVEL_3, "Cruise target speed level 4 should be greater than cruise target speed level 3");
+_Static_assert((CRUISE_MODE_WALK_ENABLED == 0) || (CRUISE_MODE_WALK_ENABLED == 1), "Cruise mode walk enabled must be 0 or 1");
+#if !CRUISE_MODE_WALK_ENABLED
+// Cruise threshold speed must be greater than 0 - except under
+// CRUISE_MODE_WALK_ENABLED, where 0 is a real, intentional value: the
+// walk-assist cruise-override is meant to engage from a dead stop (holding
+// the button while stationary/starting to walk), which requires
+// ui16_wheel_speed_x10 (0 at a standstill) to clear this threshold. See
+// apply_cruise()'s CRUISE_MODE_WALK_ENABLED branch in ebike_app.c.
+_Static_assert(CRUISE_THRESHOLD_SPEED > 0, "Cruise threshold speed must be greater than 0");
+#endif
+_Static_assert(PEDAL_TORQUE_ADC_OFFSET >= 0, "Pedal torque ADC offset must be non-negative");
+_Static_assert(AUTO_DATA_NUMBER_DISPLAY > 0, "Auto data number display must be greater than 0");
+_Static_assert((UNITS_TYPE == 0) || (UNITS_TYPE == 1), "Units type must be 0 (kilometers) or 1 (miles)");
+_Static_assert(ASSIST_THROTTLE_MIN_VALUE >= 0, "Assist throttle min value must be non-negative");
+_Static_assert(ASSIST_THROTTLE_MAX_VALUE > ASSIST_THROTTLE_MIN_VALUE, "Assist throttle max value must be greater than min value");
+_Static_assert((STREET_MODE_WALK_ENABLED == 0) || (STREET_MODE_WALK_ENABLED == 1), "Street mode walk enabled must be 0 or 1");
+_Static_assert(DATA_DISPLAY_ON_STARTUP >= 0, "Data display on startup must be non-negative");
+_Static_assert((FIELD_WEAKENING_ENABLED == 0) || (FIELD_WEAKENING_ENABLED == 1), "Field weakening enabled must be 0 or 1");
+_Static_assert(PEDAL_TORQUE_ADC_OFFSET_ADJ >= 0, "Pedal torque ADC offset adjustment must be non-negative");
+_Static_assert(PEDAL_TORQUE_ADC_RANGE_ADJ >= 0, "Pedal torque ADC range adjustment must be non-negative");
+_Static_assert(PEDAL_TORQUE_ADC_ANGLE_ADJ >= 0, "Pedal torque ADC angle adjustment must be non-negative");
+_Static_assert(PEDAL_TORQUE_PER_10_BIT_ADC_STEP_ADV_X100 > 0, "Pedal torque per 10-bit ADC step (advanced) must be greater than 0");
+_Static_assert(SOC_PERCENT_CALC >= 0, "SOC percent calculation must be non-negative");
+_Static_assert((STARTUP_BOOST_AT_ZERO == 0) || (STARTUP_BOOST_AT_ZERO == 1), "Startup boost at zero must be 0 or 1");
+_Static_assert((STREET_MODE_THROTTLE_LEGAL == 0) || (STREET_MODE_THROTTLE_LEGAL == 1), "Street mode throttle legal must be 0 or 1");
+_Static_assert((BRAKE_TEMPERATURE_SWITCH == 0) || (BRAKE_TEMPERATURE_SWITCH == 1), "Brake temperature switch must be 0 or 1");
+_Static_assert((eMTB_BASED_ON_POWER == 0) || (eMTB_BASED_ON_POWER == 1), "eMTB based on power must be 0 or 1");
+_Static_assert((SMOOTH_START_ENABLED == 0) || (SMOOTH_START_ENABLED == 1), "Smooth start enabled must be 0 or 1");
+_Static_assert((SMOOTH_START_SET_PERCENT >= 0) && (SMOOTH_START_SET_PERCENT <= 100), "Smooth start set percent must be between 0 and 100");
+_Static_assert(TEMPERATURE_SENSOR_TYPE >= 0, "Temperature sensor type must be non-negative");
+_Static_assert((CRUISE_MODE_ENABLED == 0) || (CRUISE_MODE_ENABLED == 1), "Cruise mode enabled must be 0 or 1");
+_Static_assert(THROTTLE_MODE >= 0, "Throttle mode must be non-negative");
+_Static_assert(STREET_MODE_THROTTLE_MODE >= 0, "Street mode throttle mode must be non-negative");
+_Static_assert((ALTERNATIVE_MILES == 0) || (ALTERNATIVE_MILES == 1), "Alternative miles must be 0 or 1");
+
+#endif // MAIN_H_

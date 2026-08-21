@@ -1,0 +1,103 @@
+/* App shell + generic page chrome (renderApp/renderSectionPage/renderBuildPage/
+   renderBackupFlashPage and friends in this folder all build a `.page`
+   wrapper) - imported from app-shell.ts, the true layout root every page
+   nests inside. */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* Field-color legend (built by section-page.ts, shown only at the top of
+   the Motor page - the first page most people land on, so it's an
+   onboarding explainer seen once rather than repeated chrome). Used to live
+   in the always-visible footer, but the red/amber meanings it explains
+   apply to specific settings fields, not to the Build/flash/Display pages
+   the footer is equally visible on - moved here 2026-08-19. */
+.field-color-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.1rem;
+  margin: -0.4rem 0 1rem;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 0.15rem;
+}
+
+.legend-required {
+  background: var(--red);
+}
+
+.legend-changed {
+  background: var(--amber);
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 4rem;
+}
+
+.page {
+  max-width: 46rem;
+  margin: 0 auto;
+}
+
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 1.1rem;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--accent);
+}
+
+/* Page-wide advisory (see Section.note in ui-model.ts) - amber like
+   .field-hint, but a bordered box since it applies before any single field
+   is even in view, not a per-field aside. */
+.page-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  border: 1px solid var(--amber);
+  border-radius: 0.4rem;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: var(--amber);
+}
+
+.page-note .icon {
+  margin-top: 0.15rem;
+}
+
+/* ---- Responsive: sidebar becomes a horizontal tab strip under the topbar -
+   this file's own piece is just the shell's flex-direction; see
+   render/sidebar.css/topbar.css/footer.css for the rest of this breakpoint. */
+
+@media (max-width: 760px) {
+  .app-body {
+    flex-direction: column;
+  }
+}

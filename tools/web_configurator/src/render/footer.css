@@ -1,0 +1,94 @@
+/* Page-level footer (ST-Link chip + UART chip + version) - one slim row at
+   the true bottom of the viewport on every screen size, not stacked inside
+   the sidebar. See renderFooter()'s own comment for why this moved out of
+   .sidebar (and where the field-color legend that used to live here went). */
+.app-footer {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  padding: 0.5rem 0.9rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.74rem;
+  opacity: 0.85;
+}
+
+.footer-version {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+/* Compact connection status chip (ST-Link and UART both use this) - built
+   by renderConnectionChip in this file (footer.ts), despite the "sidebar-"
+   class prefix left over from when it lived inside the sidebar (see
+   renderFooter()'s own comment for why it moved). Renamed classes weren't
+   worth the CSS/JS churn on their own; the prefix is legacy naming, not a
+   sign this styling belongs in render/sidebar.css. */
+.sidebar-connection-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  font-size: 0.74rem;
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.sidebar-connection-chip:hover {
+  opacity: 1;
+  background: var(--surface-tint-strong);
+}
+
+.sidebar-connection-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--border);
+  flex: none;
+}
+
+.sidebar-connection-chip-connected {
+  opacity: 1;
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.sidebar-connection-chip-error {
+  opacity: 1;
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.sidebar-connection-chip-connected .sidebar-connection-dot,
+.sidebar-connection-chip-error .sidebar-connection-dot {
+  background: currentColor;
+  animation: sidebar-connection-pulse 1.6s ease-out infinite;
+}
+
+/* Solid core (background: currentColor above) plus an expanding, fading
+   ring via box-shadow, so the dot reads as "live" rather than decorative -
+   a plain opacity fade on the dot itself would just look like blinking. */
+@keyframes sidebar-connection-pulse {
+  0% {
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  70% {
+    box-shadow: 0 0 0 0.3rem transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-connection-chip-connected .sidebar-connection-dot,
+  .sidebar-connection-chip-error .sidebar-connection-dot {
+    animation: none;
+  }
+}

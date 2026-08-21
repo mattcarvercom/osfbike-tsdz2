@@ -1,0 +1,25 @@
+name: PR Single Commit
+
+# Enforces this repo's "squash locally, force-push a single commit" PR workflow
+# (see CLAUDE.md's "Git workflow" section) at the GitHub level, not just by
+# convention - a PR sitting on more than one commit fails this check and is
+# blocked from merging into master by branch protection.
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  single-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require exactly one commit
+        env:
+          COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+        run: |
+          echo "PR has $COMMIT_COUNT commit(s)."
+          if [ "$COMMIT_COUNT" -ne 1 ]; then
+            echo "::error::This PR has $COMMIT_COUNT commits, but only single-commit PRs are mergeable here. Squash locally (git reset --soft master && git commit) and update with git push --force-with-lease."
+            exit 1
+          fi

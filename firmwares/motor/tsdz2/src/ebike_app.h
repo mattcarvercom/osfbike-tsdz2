@@ -1,0 +1,71 @@
+/*
+ * TongSheng TSDZ2 motor controller firmware/
+ *
+ * Copyright (C) Casainho, Leon, MSpider65 2020.
+ *
+ * Released under the GPL License, Version 3
+ */
+
+#ifndef EBIKE_APP_H_
+#define EBIKE_APP_H_
+
+#include <stdint.h>
+
+// Task period for ebike_app_controller (ms) - defines the main control loop rate
+#define EBIKE_TASK_MS                                   25U
+
+// startup boost mode
+#define CADENCE						0
+#define SPEED						1
+#define AUTO_BOOST					2
+
+// for oem display
+extern volatile uint8_t ui8_display_fault_code;
+extern volatile uint8_t ui8_system_state;
+
+
+// pedals are loaded
+extern volatile uint8_t pedals_torque_loaded;
+
+//throttle is enabled and applied
+extern volatile uint8_t ui8_throttle_adc_map;
+
+// Torque sensor coaster brake engaged threshold value
+extern volatile uint16_t ui16_adc_coaster_brake_threshold;
+
+// ADC motor phase current max
+extern volatile uint8_t ui8_adc_motor_phase_current_max;
+
+// Motor enabled
+extern volatile uint8_t ui8_motor_enabled;
+
+// Torque type of assist
+extern volatile uint8_t ui8_riding_torque_mode;
+typedef struct _configuration_variables
+{
+  uint8_t ui8_battery_current_max;
+  uint16_t ui16_battery_low_voltage_cut_off_x10;
+  uint16_t ui16_wheel_perimeter;
+  // for oem display
+  uint8_t ui8_startup_assist_enabled;
+  uint8_t ui8_torque_sensor_estimated;
+  uint8_t ui8_pedal_torque_per_10_bit_ADC_step_est_x100;
+  uint8_t ui8_assist_without_pedal_rotation_enabled;
+  uint8_t ui8_assist_with_error_enabled;
+  uint8_t ui8_battery_SOC_percentage_8b;
+  uint8_t ui8_set_parameter_enabled;
+  uint8_t ui8_street_mode_enabled;
+  uint8_t ui8_riding_mode;
+  uint8_t ui8_lights_configuration;
+  uint8_t ui8_startup_boost_enabled;
+  uint8_t ui8_auto_display_data_enabled;
+  uint8_t ui8_torque_sensor_adv_enabled; 
+  uint8_t ui8_soc_percent_calculation;
+} struct_configuration_variables;
+
+void ebike_app_controller(void);
+struct_configuration_variables* get_configuration_variables(void);
+
+void ebike_app_init(void);
+
+#endif /* EBIKE_APP_H_ */

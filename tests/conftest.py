@@ -40,7 +40,7 @@ def pytest_sessionfinish(session, exitstatus):
             print(f"Error dumping gcov: {e}. Try running gcovr manually after pytest process exits.")
         try:
             # Attempt to call gcovr with the specified arguments
-            subprocess.call(['gcovr', '-r', 'tests', '--print-summary'])
+            subprocess.call(['gcovr', '-r', 'tests', '--gcov-ignore-errors=all', '--print-summary'])
         except FileNotFoundError:
             # Handle the case where gcovr is not found (i.e., not installed)
             print(" Install Gcovr to generate code coverage report.")

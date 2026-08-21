@@ -1,103 +1,92 @@
-![GitHub issues](https://img.shields.io/github/issues/emmebrusa/TSDZ2-Smart-EBike-1) [![Build Action](../../actions/workflows/build.yaml/badge.svg)](../../actions/workflows/build.yaml)
+![GitHub issues](https://img.shields.io/github/issues/mattcarvercom/osfbike-tsdz2) [![Build Action](../../actions/workflows/build.yaml/badge.svg)](../../actions/workflows/build.yaml)
 
-This repository is updated by mbrusa.
+# osf.bike — TSDZ2 Smart eBike Firmware
 
-This fork is based on the TSDZ2-v0.20beta1 adapted for Tongsheng protocol displays, like stock VLCD5, VLCD6, XH18 or other displays with the same protocol and 6-pin Tonsheng connector, SW102, DZ41, 850C or 860C for TSDZ2.
-With these last displays, the visualization of data and errors must be checked..
+Open-source replacement firmware for the Tongsheng TSDZ2 mid-drive motor's STM8-based controller, plus
+its own from-scratch LVGL UI ("OSF Modern") for the 860C/850C color displays (SW102 support exists too,
+running its original UI - not yet rewritten). Forked from
+[emmebrusa/TSDZ2-Smart-EBike-1](https://github.com/emmebrusa/TSDZ2-Smart-EBike-1) — full credit for
+the underlying motor firmware to Casainho, EndlessCadence, Leon, mspider65, and mbrusa (that fork's
+maintainer); see the upstream repo's [wiki](https://github.com/emmebrusa/TSDZ2-Smart-EBike-1/wiki) and
+the [Endless Sphere forum thread](https://endless-sphere.com/forums/viewtopic.php?f=30&t=110682) for the
+general project's documentation, history, and community support. This README covers what's specific to
+this fork: the browser-based build/flash/configure tooling (`tools/web_configurator`, hosted at
+[flash.osf.bike](https://flash.osf.bike)) that replaced the project's original Java/native toolchain, the
+display firmware rewrite, and general hardware/wiring notes.
 
-Endless Sphere forum reference thread: [endless-sphere.com.](https://endless-sphere.com/forums/viewtopic.php?f=30&t=110682).
+Also credit to [dzid26/TSDZ2-Smart-EBike](https://github.com/dzid26/TSDZ2-Smart-EBike) — a separate,
+independently-developed fork whose `firmwares/motor/tsdz2/src/` improvements (motor overrun mitigation, smoother startup
+torque, wheel-speed/cadence math fixes, C23 support, cppcheck CI, compile-time config sanity checks) were
+merged into this fork's history on 2026-08-18 via a full rebase (not a cherry-pick), so their original
+commits/authorship are preserved intact in `git log`. See
+[`UNIVERSAL_FIRMWARE_PLAN.md`](UNIVERSAL_FIRMWARE_PLAN.md#phase-2-tuning-firmware-ongoing)'s
+"Phase 2: Tuning firmware" section for the full merge writeup, including the two real conflicts it
+surfaced against this fork's own cruise-override/battery-sag work.
 
-See the [wiki](https://github.com/emmebrusa/TSDZ2-Smart-EBike-1/wiki) for instructions
+This firmware is adapted for Tongsheng-protocol displays (stock VLCD5, VLCD6, XH18, or other displays
+with the same protocol and 6-pin Tongsheng connector, SW102, DZ41, 850C, or 860C). Compared to stock
+firmware it makes the motor run more efficiently (more power, less energy use), the bike feel more
+responsive, and supports more displays/peripherals. Note: firmware can't be written to Enerdan-sold TSDZ2
+motors/controllers — those use a V2 controller with an XMC1300 microprocessor, not STM8.
 
-This ebike motor controller firmware project is to be used with the Tongsheng TSDZ2 mid drive motor.
-Note: firmware can't be written to Enerdan sold TSDZ2 motors and controllers because they are equipped with V2 controller and XMC1300 microprocessor instead of STM8.
+## Building and flashing with the web configurator
 
-It has the following benefits compared to the stock firmware:
-* The motor runs more efficient therefore it becomes more powerful and consumes less energy.
-* The ebike will feel more responsive and agile.
-* Using other supported displays and pheriperals will provide more functionality and features.
-* Because this project is in heavy development more features will be added.
+- Open `tools/web_configurator` in a WebUSB-capable browser (Chrome/Edge). It builds firmware in-browser
+  (SDCC compiled to WASM) and flashes over WebUSB via an ST-Link V2 — no local toolchain install required,
+  works the same on Windows/Linux/macOS.
+- See [`tools/web_configurator/README.md`](tools/web_configurator/README.md) for setup and usage, and
+  [`tools/CLAUDE.md`](tools/CLAUDE.md) for the tool's internals and known SDCC/build quirks.
+- Native flashing (`stm8flash`/OpenOCD) still works as a fallback; on Linux it needs a udev rule granting
+  non-root USB access to the ST-Link V2 (idVendor 0483, idProduct 3748) in `/etc/udev/rules.d/`. WebUSB
+  doesn't need this — the browser's own device picker handles permissions.
+- `firmwares/motor/tsdz2/src/Makefile` note: `--out-fmt-elf --debug` is commented out of `DEBUG_FLAGS` — no available `objcopy`
+  build (apt, official SDCC 4.4.0 tarball, Ubuntu jammy binutils) supports the STM8 ELF BFD target. SDCC
+  emits Intel HEX natively instead, which `make flash`/`make backup` already expect.
 
-This project is being developed and maintained for free by a community of users. Some of them are developers who work professionally developing this type of technology for very well known companies.
+### Hardware / wiring notes (ST-Link V2 / SWIM)
 
-## Building and flashing with Java tool
-### Windows 
-- Install [SDCC](http://sdcc.sourceforge.net/index.php#Download).
-  version 4.4.0 or higher required.
-- Install [ST Visual Development](http://www.st.com/en/development-tools/stvd-stm8.html).
-- Install [Java](https://www.java.com/endownload/).
-- Open JavaConfigurator.jar customize the parameters and click Compile & Flash
-- Or use supplied .bat scripts, e.g. `src/compile_and_flash.bat` 
-- With 32-bit Windows systems, replace the files in the \tools\cygwin\bin folder with those in the bin_32.zip file
-
-### Linux and MacOS
-- Install [SDCC](http://sdcc.sourceforge.net/index.php#Download).
-  version 4.1.0 or higher required.
-- Install Stm8flash `git clone https://github.com/vdudouyt/stm8flash.git && cd stm8flash && make && sudo make install`
-- Install [Java](https://www.java.com/endownload/).
-- Open JavaConfigurator.jar customize the parameters and click Compile & Flash
-- And/Or use supplied shell script `compile_and_flash_20.sh` 
-
-### For more information, go to the [wiki](https://github.com/emmebrusa/TSDZ2-Smart-EBike-1/wiki) instructions.
-
-## Development / contributing
-### Setup
-1. Clone this repository
-2. Install the SDCC compiler
-
-### Debugging
-- You can do `cd src & make -j3`, import _elf_ into [STMStdudio](https://www.st.com/en/development-tools/stm-studio-stm8.html) and plot global variables in real-time
-- Or use VScode and one of the debugging setups from `.vscode/launch.json`
- 1. on Windows, unpack stm8-gdb.exe binary to folder located in your system's PATH environment variable
- 2. make sure OpenOCD 0.12 is installed
- 3. install [cpptools](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools)
- 4. press F5 in VScode to build, flash, and debug (`STM8-gdb` profile)
+- SWIM wiring: GND, SWIM, VDD (**3.3V — not 5V**; the STM8S105 is a native 3.3V part, and 5V risks
+  backfeeding the controller's onboard 3.3V regulator), and NRST — wired to the controller PCB's SWIM test
+  points, routed out through the wheel-speed-sensor connector's housing opening for convenience.
+- **The controller MCU is powered from the main battery pack** via its own onboard regulator — the ST-Link
+  does not power the board. The battery must be connected or SWIM gets no response at all (`SWIM error
+  0x04`).
+- SWIM can be flaky on first attach even with the battery connected. If you see `IO error: expected N
+  bytes but 0 bytes transferred` (different from the no-power error above): wiggle/reseat all 4 wires,
+  power-cycle the battery with the ST-Link still attached, then retry immediately.
+- Display power state does not matter for flashing — no need to power the display on for SWIM to work.
 
 ## Testing
-### Setup
-Initialize virtual environment (optional)::
 
-`py -m venv .venv`
+Setup:
 
-Enable virtual environment or let VScode to do it automatically:
+```
+py -m venv .venv
+.venv\Scripts\activate   # or: source .venv\Scripts\activate
+pip install .
+```
 
-`.venv\Scripts\activate` or `source .venv\Scripts\activate`
+Usage:
 
-Install dependencies:
+```
+pytest                            # run tests
+pytest --coverage                 # with coverage report (probably won't work on Windows)
+```
 
-`pip install .`
+Any changes should have a corresponding unit test added, unless unfeasible. Tests with coverage also run
+in CI.
 
-### Usage
+## Editing environment
 
-Run tests:
-
-`pytest`
-
-Any changes should have a corresponding unit test added, unless unfeasible.
-
-Calculate coverage and generate html report (probably will not work on Windows):
-`pytest --coverage`
-
-Tests with coverage are executed in the CI as well.
-
-### Compile the firmware manually
-- `cd src/` and use `make` or `compile.bat` to compile the firmware.
-
-### Flashing the firmware manually
-- Use `make flash` or `flash.bat` to flash the firmware.
-- If you have Android with OTG you can [transfer](https://dl.google.com/tag/s/appguid%3D%7B232066FE-FF4D-4C25-83B4-3F8747CF7E3A%7D%26iid%3D%7B4A198779-3904-500B-CF23-602510C07E5B%7D%26lang%3Den%26browser%3D4%26usagestats%3D0%26appname%3DNearby%2520Better%2520Together%26needsadmin%3Dtrue/better_together/BetterTogetherSetup.exe) `main.hex`to your phone and use [Stm8 updater](https://play.google.com/store/apps/details?id=com.yatrim.stlinkp8) app to flash the `stm8s105s6`
-- For advanced flashing and option bytes managment use [ST Visual Programmer STM8](https://www.st.com/en/development-tools/stvp-stm8.html). You can use preconfigured project file from `tools/ST_Vision_Programming.stp`.
-
-
-### Editing environment
-1. VScode can be used for the development.
-  a) open project top folder as workspace
-  b) install extensions from recommended popup
-  c) configure Intellisense by going to Settings `ctrl+,` and specifying `@id:C_Cpp.default.systemIncludePath` according to SDCC installation folder, e.g: `C:\\Program Files\\SDCC\\include`
-  d) `Ctrl+Shift+b` to build the firmware
-
+VSCode can be used for development:
+1. Open the project's top folder as the workspace.
+2. Install extensions from the recommended-extensions popup.
+3. Configure Intellisense: Settings (`Ctrl+,`) → `@id:C_Cpp.default.systemIncludePath` → point at your
+   SDCC installation's include folder (e.g. `C:\Program Files\SDCC\include`).
+4. `Ctrl+Shift+B` to build the firmware.
 
 ## IMPORTANT NOTES
+
 * Installing this firmware will void your warranty of the TSDZ2 mid drive.
 * We are not responsible for any personal injuries or accidents caused by use of this firmware.
 * There is no guarantee of safety using this firmware, please use it at your own risk.

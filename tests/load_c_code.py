@@ -8,7 +8,7 @@ import shutil
 import re
 import subprocess
 import cffi
-from pycparser import c_ast, parse_file, c_generator, plyparser
+from pycparser import c_ast, parse_file, c_generator, c_parser
 from distutils import ccompiler
 from typing import List
 import importlib
@@ -17,22 +17,26 @@ import hashlib
 MOD_PATH = "sim"
 LIB_DIR = 'tests/' + MOD_PATH
 
-source_dirs = ['src/']  # don't add hardware libraries
-include_dirs = ["src/", "src/STM8S_StdPeriph_Lib/inc/"]
+source_dirs = ['firmwares/motor/tsdz2/src/']  # don't add hardware libraries
+include_dirs = ["firmwares/motor/tsdz2/src/", "firmwares/motor/tsdz2/src/STM8S_StdPeriph_Lib/inc/"]
 define_macros = ["STM8S105", "__CDT_PARSER__", ]
 fake_defines = """
 #define __interrupt(x)
 #define __asm__(x)
 #define __trap
 """
-compiler_args = ["-std=c99", "-Wall", "-Wextra"]
+compiler_args = ["-std=c2x", "-Wall", "-Wextra", "-Wshadow", "-Wpointer-arith", "-Wstrict-prototypes"]
 linker_args = []
 custom_parser = ''  # actually don't use sdcpp as the cdef stdint definitions should match x86 platform
 
 # cffi uses the same compiler as distutils
 # Adjust compiler arguments based on the detected compiler
 if ccompiler.get_default_compiler() == "msvc":
-    compiler_args = []  # Windows msvc uses some funky flags
+    # Windows msvc uses some funky flags - most of the GCC-style ones above
+    # get silently ignored rather than erroring, but MSVC's default C mode
+    # predates C11 and doesn't know _Static_assert (main.h's config-sanity
+    # asserts), so that one substitution is required, not just cosmetic.
+    compiler_args = ["/std:c11"]
     linker_args = []
 
 class Checksum:
@@ -116,8 +120,8 @@ class HeaderGenerator(c_generator.CGenerator):
 
 def generate_cdef(module_name, src_file):
     # exceptions needed on some platforms (mingw)
-    skip_extensions = ["__attribute__(x)=", "__extension__=", "__MINGW_EXTENSION="]
-    skip_std_includes = ["_INC_STDIO", "_INC_STDDEF", "__STDDEF_H__", "_MATH_H_", "_INC_CORECRT",]
+    skip_extensions = ["__attribute__(x)=", "__extension__=", "__MINGW_EXTENSION=", "static_assert(x)=", "_Static_assert(...)="]
+    skip_std_includes = ["_INC_STDIO", "_INC_STDDEF", "__STDDEF_H__", "_MATH_H_", "_INC_CORECRT"]
     undef_macros = []
     std_include = []
     if shutil.which(custom_parser):
@@ -126,7 +130,7 @@ def generate_cdef(module_name, src_file):
     else:
         print("Parsing with 'cpp'")
         cpp_path = 'cpp'
-    cpp_args = ["-xc"]
+    cpp_args = ["-xc", "-std=c2x"]
 
     idirs = [r'-I' + d for d in include_dirs + std_include]
     ddefs = [r'-D' + d for d in define_macros + skip_std_includes + skip_extensions]
@@ -171,7 +175,7 @@ def load_code(module_name, coverage=False, force_recompile=False, strict=False):
                 fp.write(combined_source)
             try:
                 cdef = generate_cdef(module_name, combined_source_file_path)
-            except (subprocess.CalledProcessError, RuntimeError, plyparser.ParseError) as e:
+            except (subprocess.CalledProcessError, RuntimeError, c_parser.ParseError) as e:
                 print(f"{e}\n\033[93mFailed to generate cdef using your cpp standard headers!!!\nYou may have to edit it manually. Continuing...\033[0m")
                 with open(os.path.join(LIB_DIR, f"{module_name}.cdef"), "r", encoding="utf8") as fp:
                     cdef = fp.read()

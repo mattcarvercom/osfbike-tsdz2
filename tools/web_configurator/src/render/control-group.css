@@ -1,0 +1,307 @@
+/* ---- Repeater cards (numbered families: assist levels, cruise/walk speeds,
+   display data slots, ...) - a compact table instead of N near-identical
+   full-width rows, the single biggest fix for the old "positional dump"
+   feel since ~40 of ~135 fields are one of these families. --------------- */
+
+.field-group {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.7rem 0.9rem 0.8rem;
+  margin-bottom: 0.7rem;
+}
+
+.field-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  font-size: 0.88rem;
+  margin-bottom: 0.55rem;
+}
+
+.field-group-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.field-group-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  padding: 0.3rem 0.4rem;
+  min-width: 4.5rem;
+}
+
+.field-group-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.65;
+}
+
+.field-group-cell input[type="number"],
+.field-group-cell input[type="text"] {
+  width: 5.5rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.field-group-cell-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.field-group-cell select {
+  max-width: 12rem;
+  padding: 0.25rem 0.35rem;
+}
+
+/* One select per line (Display data 1-6, Lights configuration 1-3) instead
+   of the compact multi-column grid above - these carry long, meaningful
+   option text that a narrow column would cut off. */
+.field-group-row-stacked {
+  flex-direction: column;
+  flex-wrap: nowrap;
+}
+
+.field-group-cell-stacked {
+  flex-direction: row;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 0.15rem 0.4rem;
+}
+
+.field-group-cell-stacked .field-group-tag {
+  flex: none;
+  width: 1.4rem;
+}
+
+.field-group-cell-stacked select {
+  flex: 1;
+  max-width: none;
+  min-width: 0;
+}
+
+/* Highlights whichever assist-level card(s) match the current "Assist mode
+   on startup" selection (see startupAssistNote/STARTUP_ASSIST_STEM_KEYS in
+   assist-level5.ts) - dynamic, re-evaluated on every render, so it follows
+   the radio as it changes, including both cards at once under Hybrid. */
+.field-group.field-group-startup {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.field-group.field-group-startup > .field-group-header > span:first-child {
+  color: var(--accent);
+}
+
+.field-group-startup-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+/* Columns matched 1:1 with the assist curve chart's bars above (see
+   render/assist-chart.ts's renderAssistCurveChart/STEM_TO_ASSIST5_LABEL) -
+   fixed equal-width, non-wrapping columns with the same gap as
+   .assist-chart-bars, instead of the generic auto-width/wrap layout, so
+   each input sits directly under its bar. */
+.field-group-row-chart {
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+}
+
+.field-group-row-chart .field-group-cell {
+  flex: 1;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.field-group-row-chart .field-group-cell input[type="number"] {
+  width: 100%;
+}
+
+/* Non-interactive spacer column where the chart's L5 bar sits (Before
+   Eco/After Turbo) - keeps the 4 real level columns aligned with their bars
+   without pretending there's a 5th editable field here. */
+.field-group-cell-placeholder {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* Styled like a disabled input's footprint (dashed border instead of solid,
+   so it still reads as "not editable") rather than plain text, so the L5
+   value looks like a peer of the real number inputs beside it instead of a
+   caption. Color matches the chart's L5 bar (accent-2, red on overflow) so
+   the same value is recognizable in both places at a glance. */
+.field-group-cell-placeholder-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 1.7rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-2);
+}
+
+.field-group-cell-placeholder-value-warn {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* Per-cell "Overridden by Cruise" badge (see EXTRA_CELL_ENABLED/renderControlGroup
+   in this folder) - amber like .field-hint, just small enough to fit under a
+   narrow field-group-cell without forcing it wider. */
+.field-group-cell-override-badge {
+  font-size: 0.66rem;
+  line-height: 1.15;
+  color: var(--amber);
+}
+
+/* Consolidated card-level warning below a group's extra toggles (currently
+   just the four Cruise-override-walk-assist checkboxes) - bordered box like
+   .page-note (same amber, same reasoning: applies to the whole set of
+   toggles above it, not one single field), but margin-top instead of
+   margin-bottom since it's the last thing in the card rather than the first
+   thing on the page. */
+.field-group-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  border: 1px solid var(--amber);
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.7rem;
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--amber);
+}
+
+.field-group-note .icon {
+  margin-top: 0.1rem;
+}
+
+/* ---- Cell volts card (Full | Bar thresholds | Empty) -------------------- */
+
+.cell-volts-grid {
+  display: flex;
+  align-items: stretch;
+}
+
+.cell-volts-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0 1rem;
+}
+
+.cell-volts-col:first-child {
+  padding-left: 0;
+}
+
+.cell-volts-col:not(:first-child) {
+  border-left: 1px solid var(--border);
+}
+
+.cell-volts-col:nth-child(2) {
+  flex: 1;
+}
+
+.cell-volts-col-header {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.65;
+  margin-bottom: 0.15rem;
+}
+
+.cell-volts-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  /* Full/Empty are single rows next to a mid column with two stacked rows
+     (4-bar, 6-bar) - grow to fill the stretched column's full height (see
+     .cell-volts-grid's align-items: stretch) and center within it, instead
+     of sitting flush against the header like the mid column's first row. */
+  flex: 1;
+}
+
+.cell-volts-row input[type="text"] {
+  width: 3.4rem;
+  padding: 0.25rem 0.35rem;
+}
+
+.cell-volts-row.field-disabled {
+  opacity: 0.45;
+}
+
+/* Cell volts values are short fixed-format decimals ("3.85") - narrower
+   than the generic .field-group-cell sizing (tuned for repeaters with wider
+   values like assist percentages), so the 3/4-bar and 5/6-bar rows stay on
+   one line each instead of wrapping inside the mid column's tighter width. */
+.cell-volts-col-mid .field-group-row {
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+}
+
+/* flex: 1 on each cell (instead of the generic auto-width sizing) spreads
+   the row's thresholds evenly across the full mid-column width, so the run
+   of boxes reads as one continuous strip of segments - like the battery
+   gauge they represent - rather than a left-packed cluster with dead space
+   on the right. */
+.cell-volts-col-mid .field-group-cell {
+  min-width: 0;
+  flex: 1;
+  padding: 0.2rem 0.3rem;
+}
+
+.cell-volts-col-mid .field-group-cell input[type="text"] {
+  width: 100%;
+  padding: 0.25rem 0.35rem;
+}
+
+/* Below this width the 3-column row (Full | Bar thresholds | Empty) is the
+   one layout on the whole page that doesn't just fall back to the page's
+   normal horizontal scroll - its fixed side-by-side columns, plus the mid
+   column's deliberately-nowrap threshold strip above, force a horizontal
+   scrollbar on the entire page instead of staying contained. Stack the 3
+   columns vertically, and let the mid column's own threshold strip wrap
+   too (6-bar VLCD5/DZ40 has 6 boxes - too many to guarantee on one line
+   even at the mid column's now-full width). Same breakpoint as the
+   sidebar's own mobile layout. */
+@media (max-width: 760px) {
+  .cell-volts-grid {
+    flex-direction: column;
+  }
+
+  .cell-volts-col {
+    padding: 0.5rem 0;
+  }
+
+  .cell-volts-col:nth-child(2) {
+    flex: none;
+  }
+
+  .cell-volts-col:not(:first-child) {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .cell-volts-col-mid .field-group-row {
+    flex-wrap: wrap;
+  }
+}
