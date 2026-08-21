@@ -122,6 +122,11 @@ export const ICONS: Record<string, string> = {
   // Die showing 5 pips - the display sim's "Randomize" toggle (nudges
   // telemetry sliders on its own to simulate some action happening).
   dice: `<svg ${ICON_ATTRS}><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/><circle cx="16" cy="8" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="8" cy="16" r="1.4" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="1.4" fill="currentColor" stroke="none"/></svg>`,
+  // Two hooked chain-link arms + a diagonal bar between them - the field
+  // help panel's "copy a link to this field" button (render/control.ts).
+  link: `<svg ${ICON_ATTRS}><path d="M9 15l6-6"/><path d="M11 6.5l1-1a3.5 3.5 0 0 1 5 5l-1 1"/><path d="M13 17.5l-1 1a3.5 3.5 0 0 1-5-5l1-1"/></svg>`,
+  // Plain X - modal close buttons (render/about-modal.ts).
+  close: `<svg ${ICON_ATTRS}><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>`,
 };
 
 export function icon(name: keyof typeof ICONS, extraClass = ""): HTMLElement {

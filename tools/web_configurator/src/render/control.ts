@@ -5,6 +5,7 @@ import {
   controls,
   controlChanged,
   controlEnabled,
+  controlKeys,
   revertControl,
   persistSession,
   isDirty,
@@ -19,6 +20,7 @@ import {
   TOGGLE_GROUP_MAX_OPTIONS,
   type VisualPickerOption,
 } from "../dom.ts";
+import { fieldShareUrl } from "../url-state.ts";
 import {
   speedUnitSuffix,
   speedRawToDisplay,
@@ -75,6 +77,42 @@ export function rangeError(c: Control): string | null {
 }
 
 /**
+ * Copy-a-link-to-this-field button, sat in the top-right corner of a help
+ * panel (see .field-share-btn in control.css) - shared by every render site
+ * that builds one of these panels (this file's renderLabel, and
+ * control-group.ts's renderControlGroup/renderCellVoltsCard, which have no
+ * per-field tooltip of their own but share one combined help panel for the
+ * whole card). `fieldKey` is whatever render/field-highlight.ts's
+ * highlightField() will later look for via `[data-field-key]` - see that
+ * file for the other half of this round trip.
+ */
+export function renderFieldShareButton(sectionId: string, fieldKey: string): HTMLElement {
+  const btn = el("button", {
+    type: "button",
+    className: "field-share-btn",
+    title: "Copy a link to this field",
+  });
+  btn.appendChild(icon("link"));
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation(); // don't let this bubble to the label-text click handler that also toggles help
+    try {
+      await navigator.clipboard.writeText(fieldShareUrl(sectionId, fieldKey));
+      btn.replaceChildren(icon("check"));
+      btn.classList.add("field-share-btn-copied");
+      setTimeout(() => {
+        btn.replaceChildren(icon("link"));
+        btn.classList.remove("field-share-btn-copied");
+      }, 1500);
+    } catch {
+      // Clipboard API blocked (insecure context, denied permission, etc) -
+      // nothing sensible to fall back to short of a manual copy dialog,
+      // which isn't worth the code for what's a convenience feature.
+    }
+  });
+  return btn;
+}
+
+/**
  * Builds the label + optional "?" help-toggle button shared by every
  * control kind. Checkbox rows use a real <label> (the checkbox gets
  * prepended into it by the caller) so native label-forwarding lets clicking
@@ -94,6 +132,7 @@ function renderLabel(c: Control, labelText: string): { label: HTMLElement; help:
   if (c.tooltip) {
     help = el("div", { className: "field-help hidden" });
     for (const node of formatHelpText(c.tooltip)) help.appendChild(node);
+    help.appendChild(renderFieldShareButton(c.section, controlKeys(c)[0]));
     const toggle = el("button", {
       type: "button",
       className: "help-toggle",
@@ -153,6 +192,10 @@ export function renderControl(c: Control, app: HTMLElement): HTMLElement {
 
   const initialError = rangeError(c);
   const fieldDiv = el("div", { className: "field" });
+  // See render/field-highlight.ts's highlightField() - matches this against
+  // a shared/bookmarked #page/field URL to scroll to and highlight the
+  // right field on arrival.
+  fieldDiv.dataset.fieldKey = controlKeys(c)[0];
   /** Carries field-disabled/-changed/-invalid, everything from `row` down - deliberately *not* the outer fieldDiv, so noteBeforeDiv below (appended as fieldDiv's own direct child, ahead of this) stays fully visible/prominent even when this field itself is dependsOn-disabled and dimmed. A noteBefore exists specifically to flag context the reader needs before a disabled run of fields (e.g. DZ40's "everything from here down is disabled") - dimming it along with the fields it explains would bury the one thing that's supposed to stand out. */
   const bodyClasses = ["field-body"];
   if (!enabled) bodyClasses.push("field-disabled");

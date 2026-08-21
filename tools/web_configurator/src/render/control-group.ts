@@ -6,7 +6,7 @@ import { dz40AssistFamilyDead } from "../control-types.ts";
 import { state, controlChanged, controlEnabled, persistSession, assistChartUpdaters } from "../app-state.ts";
 import { el, icon, formatHelpText } from "../dom.ts";
 import { renderApp } from "./app-shell.ts";
-import { renderRevertButton, renderControl, rangeError } from "./control.ts";
+import { renderRevertButton, renderControl, rangeError, renderFieldShareButton } from "./control.ts";
 import { renderAssistCurveChart } from "./assist-chart.ts";
 import { speedUnitSuffix, speedRawToDisplay, speedDisplayToRaw, kmhX10ToMph, kmhToMph } from "../speed-units.ts";
 import {
@@ -312,6 +312,11 @@ export function renderControlGroup(group: FieldGroup, app: HTMLElement): HTMLEle
   const first = group.members[0].control;
   const enabled = controlEnabled(first);
   const required = group.members.some((m) => m.control.required);
+  // groupSectionControls() only ever collects number/checkbox/text/intSelect
+  // members into a FieldGroup (see repeaterTag's kind filter there) - radio
+  // never reaches here, but Control's type doesn't know that, so this still
+  // needs a runtime narrow to reach `.key`.
+  const shareFieldKey = first.kind === "radio" ? first.groupKeys[0] : first.key;
 
   // All members of a detected family share the same speedField (verified
   // empirically - e.g. every "Cruise target speed N" is "kmh", every "Walk
@@ -333,6 +338,7 @@ export function renderControlGroup(group: FieldGroup, app: HTMLElement): HTMLEle
   if (tooltip) {
     help = el("div", { className: "field-help hidden" });
     for (const node of formatHelpText(tooltip)) help.appendChild(node);
+    help.appendChild(renderFieldShareButton(first.section, shareFieldKey));
     const toggle = el("button", { type: "button", className: "help-toggle", text: "?", title: "Show/hide help" });
     toggle.addEventListener("click", () => {
       const nowHidden = help!.classList.toggle("hidden");
@@ -463,6 +469,10 @@ export function renderControlGroup(group: FieldGroup, app: HTMLElement): HTMLEle
     dz40Dead ? el("div", { className: "field-note-box" }, [icon("infoCircle"), el("span", { text: dz40Note })]) : null,
     cardBody,
   ]);
+  // See render/field-highlight.ts's highlightField() - the whole card is the
+  // shareable unit here (one combined help panel for the family), not any
+  // one member cell.
+  card.dataset.fieldKey = shareFieldKey;
   if (help) cardBody.append(help);
   // Extra checkbox controls (currently just the four Cruise-overrides-walk-
   // assist toggles, one per level) rendered as full ordinary field rows, wrapped in their
@@ -505,11 +515,17 @@ const CELL_VOLTS_HELP =
  */
 export function renderCellVoltsCard(group: CellVoltsGroup, app: HTMLElement): HTMLElement {
   const tooltip = CELL_VOLTS_HELP;
+  // Both group.full/group.empty are guaranteed non-radio (see this file's
+  // groupSectionControls(), which only ever assembles a CellVoltsGroup from
+  // the CELL_VOLTS_FULL_KEY/CELL_VOLTS_EMPTY_KEY branch's own `c.kind !==
+  // "radio"` check) - Control's type doesn't encode that, hence the narrow.
+  const shareFieldKey = group.full.kind === "radio" ? group.full.groupKeys[0] : group.full.key;
   const headerChildren: (Node | null)[] = [el("span", { text: "Cell volts (per-cell battery-gauge thresholds)" })];
   let help: HTMLElement | null = null;
   if (tooltip) {
     help = el("div", { className: "field-help hidden" });
     for (const node of formatHelpText(tooltip)) help.appendChild(node);
+    help.appendChild(renderFieldShareButton(group.full.section, shareFieldKey));
     const toggle = el("button", { type: "button", className: "help-toggle", text: "?", title: "Show/hide help" });
     toggle.addEventListener("click", () => {
       const nowHidden = help!.classList.toggle("hidden");
@@ -589,6 +605,7 @@ export function renderCellVoltsCard(group: CellVoltsGroup, app: HTMLElement): HT
     el("div", { className: "field-group-header" }, headerChildren),
     grid,
   ]);
+  card.dataset.fieldKey = shareFieldKey;
   if (help) card.append(help);
   return card;
 }

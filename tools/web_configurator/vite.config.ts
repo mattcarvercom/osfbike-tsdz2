@@ -17,4 +17,15 @@ export default defineConfig({
       ignored: ["**/.emtoolchain/**"],
     },
   },
+  // __APP_BUILD_DATE__: a compile-time constant (see app-state.ts's
+  // APP_BUILD_DATE and vite-env.d.ts's ambient declaration), not an
+  // import.meta.env var - always "today" for whichever machine/CI runner
+  // actually runs `npm run dev`/`npm run build`, never hand-maintained.
+  // Nothing under src/__tests__ currently imports app-state.ts (verified -
+  // those run under plain `node --test`, which never applies this
+  // replacement) - if that ever changes, this constant would need a
+  // fallback for the non-Vite test runner too.
+  define: {
+    __APP_BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
+  },
 });

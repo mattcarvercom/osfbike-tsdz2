@@ -19,6 +19,25 @@
   opacity: 0.7;
 }
 
+.footer-about-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  border-radius: 0.4rem;
+}
+
+.footer-about-btn:hover {
+  opacity: 1;
+  background: var(--surface-tint-strong);
+}
+
 /* Compact connection status chip (ST-Link and UART both use this) - built
    by renderConnectionChip in this file (footer.ts), despite the "sidebar-"
    class prefix left over from when it lived inside the sidebar (see

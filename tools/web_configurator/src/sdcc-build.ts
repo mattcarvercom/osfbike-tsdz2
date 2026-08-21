@@ -47,18 +47,30 @@ function relativeKeys(files: Record<string, string>, anchor: string): Record<str
   return out;
 }
 
+// Path is "../../../firmwares/motor/tsdz2/src" (repo root's firmware source),
+// not a bare "../../../src" - that was this glob's original path before the
+// "Move src/ and firmware/display/ under firmwares/" reorganization, and
+// never got updated here. Since import.meta.glob's pattern is resolved at
+// build time against literal files on disk, the stale path silently matched
+// zero files instead of erroring - firmwareCH ended up `{}`, so every build
+// failed immediately with "Can't open input file /main.c" (mcpp's own
+// error, only surfaced after sdcc-build.ts's preprocess() started actually
+// capturing mcpp's stdout/stderr - see that function's own comment).
+// Confirmed broken the same way on the live public deploy, not just here.
 const firmwareCH = relativeKeys(
-  import.meta.glob("../../../src/**/*.{c,h}", { eager: true, query: "?raw", import: "default" }) as Record<
-    string,
-    string
-  >,
+  import.meta.glob("../../../firmwares/motor/tsdz2/src/**/*.{c,h}", {
+    eager: true,
+    query: "?raw",
+    import: "default",
+  }) as Record<string, string>,
   "/src/",
 );
 const firmwarePeep = relativeKeys(
-  import.meta.glob("../../../src/peep.txt", { eager: true, query: "?raw", import: "default" }) as Record<
-    string,
-    string
-  >,
+  import.meta.glob("../../../firmwares/motor/tsdz2/src/peep.txt", {
+    eager: true,
+    query: "?raw",
+    import: "default",
+  }) as Record<string, string>,
   "/src/",
 );
 const runtimeFiles = relativeKeys(
@@ -226,6 +238,15 @@ async function runModule(
 
 async function preprocess(cFile: string, allFiles: Record<string, string>, onLog: LogFn): Promise<string> {
   const factory = await loadFactory("mcpp");
+  // mcpp's own diagnostics (which macro/line actually failed - the one
+  // thing worth showing on failure) go to its stdout/stderr callbacks, not
+  // necessarily /mcpp.err (that file isn't always written - depends on
+  // which internal error path mcpp took), so both are captured here rather
+  // than relying on the file alone. Previously this passed `() => {}`
+  // (discarded), which meant a preprocessing failure surfaced as a bare
+  // "Preprocessing main.c failed" with no way to tell why - this fixes
+  // that; see sdcc-build.ts's caller for how the two are combined below.
+  const captured: string[] = [];
   const { mod, rc } = await runModule(
     factory,
     [
@@ -242,15 +263,16 @@ async function preprocess(cFile: string, allFiles: Record<string, string>, onLog
     ],
     null,
     Object.fromEntries(Object.entries(allFiles).map(([k, v]) => ["/" + k, v])),
-    () => {},
+    (line) => captured.push(line),
   );
   if (rc !== 0) {
-    let detail = "";
+    let fileDetail = "";
     try {
-      detail = mod.FS.readFile("/mcpp.err", { encoding: "utf8" });
+      fileDetail = mod.FS.readFile("/mcpp.err", { encoding: "utf8" });
     } catch {
-      // no mcpp.err written
+      // no mcpp.err written - captured output (below) is the fallback
     }
+    const detail = [captured.join("\n"), fileDetail].filter(Boolean).join("\n") || "(mcpp gave no diagnostic output)";
     onLog(detail);
     throw new BuildError(`Preprocessing ${cFile} failed`);
   }

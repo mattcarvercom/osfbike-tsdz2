@@ -17,7 +17,10 @@ let simLoadError: string | null = null;
 let simLoadPromise: Promise<void> | null = null;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let running = true;
-let randomizing = false;
+// Starts on - lets a fresh visit to this page immediately show something
+// moving instead of a static boot state, without needing to find/click the
+// toggle first.
+let randomizing = true;
 
 // Real ui_vars.ui8_error_states bit layout (mainscreen.c's renderWarning(),
 // mainscreen.h's ERROR_* defines) - one bit per distinct fault, not a plain
