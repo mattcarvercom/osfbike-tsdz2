@@ -1,9 +1,10 @@
 import "./footer.css";
-import { state, persistSession, BACKUP_FLASH_PAGE, DISPLAY_FLASH_PAGE, APP_VERSION } from "../app-state.ts";
-import { el } from "../dom.ts";
+import { state, BACKUP_FLASH_PAGE, DISPLAY_FLASH_PAGE, APP_VERSION, APP_BUILD_DATE } from "../app-state.ts";
+import { el, icon } from "../dom.ts";
 import { webUsbAvailable } from "../usb-transport.ts";
 import { webSerialAvailable } from "../uart-transport.ts";
-import { renderApp } from "./app-shell.ts";
+import { navigateToPage } from "./app-shell.ts";
+import { openAboutModal } from "./about-modal.ts";
 
 /**
  * The ST-Link/UART connection chips and version tag used to live stacked
@@ -18,8 +19,13 @@ import { renderApp } from "./app-shell.ts";
  * this footer is equally visible on.)
  */
 export function renderFooter(app: HTMLElement): HTMLElement {
-  const version = el("div", { className: "footer-version", text: APP_VERSION });
-  return el("footer", { className: "app-footer" }, [renderStLinkChip(app), renderUartChip(app), version]);
+  const version = el("div", { className: "footer-version", text: `${APP_VERSION} · built ${APP_BUILD_DATE}` });
+  const aboutBtn = el(
+    "button",
+    { type: "button", className: "footer-about-btn", title: "About this tool", onclick: () => openAboutModal() },
+    [icon("infoCircle")],
+  );
+  return el("footer", { className: "app-footer" }, [renderStLinkChip(app), renderUartChip(app), version, aboutBtn]);
 }
 
 /**
@@ -83,11 +89,7 @@ function renderStLinkChip(app: HTMLElement): HTMLElement {
     disconnectedText: "ST-Link: not connected",
     unavailableText: "WebUSB unavailable",
     title: available ? "Go to Backup & flash to connect/disconnect" : "This browser doesn't support WebUSB",
-    onClick: () => {
-      state.activePage = BACKUP_FLASH_PAGE;
-      persistSession();
-      renderApp(app);
-    },
+    onClick: () => navigateToPage(app, BACKUP_FLASH_PAGE),
   });
 }
 
@@ -109,10 +111,6 @@ function renderUartChip(app: HTMLElement): HTMLElement {
     disconnectedText: "UART adapter: not connected",
     unavailableText: "Web Serial unavailable",
     title: available ? "Go to Display firmware to connect/disconnect" : "This browser doesn't support Web Serial",
-    onClick: () => {
-      state.activePage = DISPLAY_FLASH_PAGE;
-      persistSession();
-      renderApp(app);
-    },
+    onClick: () => navigateToPage(app, DISPLAY_FLASH_PAGE),
   });
 }

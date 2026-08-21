@@ -5,14 +5,13 @@ import {
   controls,
   controlChanged,
   revertSection,
-  persistSession,
   BUILD_PAGE,
   BACKUP_FLASH_PAGE,
   DISPLAY_FLASH_PAGE,
   DISPLAY_SIM_PAGE,
 } from "../app-state.ts";
 import { el, icon, ICONS } from "../dom.ts";
-import { renderApp } from "./app-shell.ts";
+import { renderApp, navigateToPage } from "./app-shell.ts";
 
 export const SECTION_ICONS: Record<string, keyof typeof ICONS> = {
   motor: "motor",
@@ -97,11 +96,7 @@ function renderNavItem(app: HTMLElement, item: NavItem): HTMLElement {
     {
       type: "button",
       className: `sidebar-item${active ? " sidebar-item-active" : ""}`,
-      onclick: () => {
-        state.activePage = item.id;
-        persistSession();
-        renderApp(app);
-      },
+      onclick: () => navigateToPage(app, item.id),
     },
     [
       icon(SECTION_ICONS[item.id] ?? "misc", "sidebar-icon"),

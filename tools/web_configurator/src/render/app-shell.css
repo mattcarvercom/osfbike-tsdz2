@@ -9,12 +9,13 @@
   height: 100vh;
 }
 
-/* Field-color legend (built by section-page.ts, shown only at the top of
-   the Motor page - the first page most people land on, so it's an
-   onboarding explainer seen once rather than repeated chrome). Used to live
-   in the always-visible footer, but the red/amber meanings it explains
-   apply to specific settings fields, not to the Build/flash/Display pages
-   the footer is equally visible on - moved here 2026-08-19. */
+/* Field-color legend (built by section-page.ts, shown at the top of every
+   controller page - Motor, Battery, Display, etc). Used to live in the
+   always-visible footer, but the red/amber meanings it explains apply to
+   specific settings fields, not to the Build/flash/Display pages the
+   footer is equally visible on - moved here 2026-08-19, then widened from
+   Motor-only to every controller page 2026-08-21 (it was too easy to miss
+   entirely if your first stop wasn't Motor specifically). */
 .field-color-legend {
   display: flex;
   flex-wrap: wrap;

@@ -1,0 +1,138 @@
+/* True viewport-level overlay (see about-modal.ts's own comment on why this
+   lives outside #app) - fixed positioning here is relative to the viewport,
+   not any app container. */
+.about-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.about-modal {
+  position: relative;
+  width: min(38rem, 100%);
+  max-height: min(40rem, 90vh);
+  display: flex;
+  flex-direction: column;
+  /* `Canvas` (a CSS4 system color, opaque, light/dark-aware) - NOT
+     var(--surface), which was never actually defined anywhere in this app
+     (base.css only defines --surface-tint/--surface-tint-strong, translucent
+     tints meant to layer ON a real background, not stand in for one). That
+     undefined-variable reference silently resolved to no background at all,
+     which is why the modal read as washed out/see-through against the
+     configurator behind it. */
+  background: Canvas;
+  color: CanvasText;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.45);
+  padding: 1.25rem 1.25rem 1rem;
+}
+
+.about-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  border-radius: 0.4rem;
+}
+
+.about-modal-close:hover {
+  opacity: 1;
+  background: var(--surface-tint-strong);
+}
+
+.about-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-right: 1.6rem;
+}
+
+.about-modal-header .icon {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+.about-modal-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.about-modal-version {
+  margin: 0.2rem 0 0.8rem;
+  font-size: 0.78rem;
+  opacity: 0.65;
+}
+
+/* Plain scrollable window over the credits list - deliberately NOT an
+   auto-scrolling "movie credits" reel anymore (removed 2026-08-21): that
+   version had to guess a fixed viewport height in rem to know where
+   "fully below the fold" was, which silently drifted out of sync with the
+   real rendered height (flex:1 + an explicit height fight over sizing) and
+   caused loop restarts to visibly skip - a whole class of bug a plain
+   scroll container can't have. It also had no working pause affordance on
+   touch (no hover), which is a real problem on a WebUSB-only app that's
+   still opened from phones for the display-flashing pages. Native scroll -
+   mouse wheel, drag scrollbar, or touch - works identically everywhere.
+   The top/bottom fade is now just a "there's more, scroll" hint rather
+   than motion-hiding cover. */
+.about-modal-scroll-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 16rem;
+  overflow-y: auto;
+  mask-image: linear-gradient(to bottom, transparent, black 8%, black 92%, transparent);
+}
+
+/* Padding, not margin, on the scrolling content itself - at rest (scrolled
+   to top/bottom) this sits inside the mask's faded 8% band instead of real
+   text, so the first/last line never gets cut off by it. Only the fade's
+   intended job - dimming content that's scrolled further up/down out of
+   the frame - actually eats real text now. */
+.about-modal-credits {
+  padding: 1rem 0;
+}
+
+.about-modal-credits h3 {
+  margin: 1.1rem 0 0.3rem;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.about-modal-credits h3:first-child {
+  margin-top: 0;
+}
+
+.about-modal-credits p {
+  margin: 0.15rem 0;
+  font-size: 0.78rem;
+  opacity: 0.75;
+  text-align: center;
+}
+
+.about-modal-credits a {
+  color: var(--accent-2);
+  text-decoration: none;
+}
+
+.about-modal-credits a:hover {
+  text-decoration: underline;
+}
+
+.about-modal-credits h3 a {
+  color: inherit;
+}

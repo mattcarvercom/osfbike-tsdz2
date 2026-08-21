@@ -8,11 +8,18 @@ import { SECTIONS, buildControls, type Control } from "./ui-model.ts";
 import type { ConnectedProgrammer } from "./usb-transport.ts";
 import { valuesAreDirty, validPage as sessionValidPage, loadedFileNameIsDirty, type Session } from "./session.ts";
 
-// No semver here on purpose - matches this repo's own dated-release
-// convention (releases/motor/*.hex, settings/experimental/*.ini all carry a
-// timestamp, not a version number). Bump by hand on a change worth calling
-// out to whoever's using the tool.
-export const APP_VERSION = "v2026.08.19";
+// Real semver, bumped by hand on a change worth calling out to whoever's
+// using the tool - unlike releases/motor/*.hex (which stay dated, matching
+// this repo's own firmware-release convention), this is a UI/tool version,
+// where "what changed" matters more than "when". Paired with an automatic
+// build date (footer.ts renders both together) so a bug report/forum link
+// always carries both "which version" and "when this exact build was made",
+// without relying on the version number alone to have been bumped recently.
+export const APP_VERSION = "v1.0.0";
+// __APP_BUILD_DATE__ is injected by vite.config.ts's `define` at build time
+// (see vite-env.d.ts for the ambient declaration) - always today's date for
+// `npm run dev`/`npm run build`, never hand-maintained.
+export const APP_BUILD_DATE: string = __APP_BUILD_DATE__;
 
 // Split into two pages (2026-08-19): Build (in-browser SDCC compile, no
 // hardware needed) is a genuinely different workflow from Backup & flash

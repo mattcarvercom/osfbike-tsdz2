@@ -358,12 +358,79 @@
 }
 
 .field-help {
+  position: relative;
   margin: 0 0 0.4rem;
-  padding: 0.4rem 0.6rem;
+  padding: 0.4rem 2rem 0.4rem 0.6rem;
   font-size: 0.8rem;
   opacity: 0.85;
   background: var(--surface-tint-strong);
   border-radius: 0.3rem;
+}
+
+/* Copy-a-link-to-this-field button - see renderFieldShareButton() in
+   render/control.ts. Top-right of the help panel, same corner regardless of
+   how much help text there is above it. */
+.field-share-btn {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  border-radius: 0.3rem;
+}
+
+.field-share-btn:hover {
+  opacity: 1;
+  background: var(--surface-tint-strong);
+}
+
+.field-share-btn-copied {
+  opacity: 1;
+  color: var(--success);
+}
+
+/* Deep-link arrival highlight (see render/field-highlight.ts) - an
+   expanding, fading ring around the whole field, same pulse mechanic as
+   footer.css's connection-status dot but scaled to a field-sized box
+   instead of a small circle, repeated a few times (3) so it's actually
+   noticeable rather than a single easy-to-miss flash, then stops for good -
+   this is a one-time "you were linked here" cue, not a permanent decoration.
+   --accent-2 (teal), not --accent (blue) - blue already means "selected/
+   primary" elsewhere (e.g. Riding modes' power-on-default picker), and a
+   dedicated violet token tried first here read as too pink in practice -
+   --accent-2 is already used for a similarly "worth noticing" nudge
+   (slider recommended-value marks), so it fits the same register. */
+.field-highlight-pulse {
+  animation: field-highlight-pulse 1.1s ease-out 3;
+  border-radius: 0.4rem;
+}
+
+@keyframes field-highlight-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--accent-2);
+  }
+  30% {
+    box-shadow: 0 0 0 0.3rem var(--accent-2);
+  }
+  100% {
+    box-shadow: 0 0 0 0.3rem transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .field-highlight-pulse {
+    animation: none;
+    box-shadow: 0 0 0 0.15rem var(--accent-2);
+  }
 }
 
 .field-help p {

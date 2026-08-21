@@ -49,15 +49,14 @@ export function renderSectionPage(sectionId: string, app: HTMLElement): HTMLElem
       icon(SECTION_ICONS[sectionId] ?? "misc"),
       document.createTextNode(" " + section.title),
     ]),
-    // Motor is SECTIONS[0] - the page most people land on first, and where
-    // "required for your hardware" fields (motor type especially) matter
-    // most immediately - so this is a one-time explainer seen here, not
-    // chrome repeated on every settings page (it used to live in the
-    // always-visible footer - see app-shell.css's .field-color-legend
-    // comment). The red/amber meanings themselves apply to fields on
-    // several other sections too (battery, display, assist, ...), not just
-    // this one - the legend just isn't repeated there.
-    ...(sectionId === "motor" ? [renderFieldColorLegend()] : []),
+    // Shown on every controller page (this function only ever renders one -
+    // Build/Backup & flash/Display firmware/Display sim each have their own
+    // render function, not this one) - the red/amber meanings apply to
+    // fields across most sections, not just Motor, so the legend used to be
+    // easy to miss entirely if your first stop wasn't Motor specifically. It
+    // used to live in the always-visible footer - see app-shell.css's
+    // .field-color-legend comment for why that moved here instead.
+    renderFieldColorLegend(),
     ...(section.note
       ? [el("p", { className: "page-note" }, [icon("infoCircle"), el("span", { text: section.note })])]
       : []),

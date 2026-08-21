@@ -4,6 +4,8 @@ import { type Session, loadedFileNameFromSession, baselineLoadedFileNameFromSess
 import { state, persistSession, validPage } from "../app-state.ts";
 import { el, icon, iconButton } from "../dom.ts";
 import { renderApp } from "./app-shell.ts";
+import { type UrlLocation, writeUrlLocation } from "../url-state.ts";
+import { highlightField } from "./field-highlight.ts";
 
 /**
  * Shown instead of the shell on first load only when the persisted session
@@ -16,7 +18,17 @@ import { renderApp } from "./app-shell.ts";
  * to a loaded .ini should land back on that .ini, not erase the fact it was
  * loaded at all.
  */
-export function renderRestoreBanner(app: HTMLElement, session: Session) {
+export function renderRestoreBanner(app: HTMLElement, session: Session, urlLoc: UrlLocation | null) {
+  // A shared/bookmarked deep link takes priority over the session's own
+  // last-active page, same reasoning as main.ts's own startup handling
+  // (that's the whole point of sharing one) - applied to both Restore and
+  // Discard below, since the destination page isn't a property of which
+  // button was clicked.
+  const landingPage = (s: Session) => validPage(urlLoc?.page ?? s.activePage);
+  const afterRender = () => {
+    writeUrlLocation(state.activePage, urlLoc?.field ?? null, true);
+    if (urlLoc?.field) highlightField(app, urlLoc.field);
+  };
   const when = new Date(session.savedAt).toLocaleString();
   const source = loadedFileNameFromSession(session) ?? "firmware defaults";
   app.innerHTML = "";
@@ -39,13 +51,14 @@ export function renderRestoreBanner(app: HTMLElement, session: Session) {
               state.currentFileBaseName = session.currentFileBaseName;
               state.loadedFileName = loadedFileNameFromSession(session);
               state.baselineLoadedFileName = baselineLoadedFileNameFromSession(session);
-              state.activePage = validPage(session.activePage);
+              state.activePage = landingPage(session);
               state.firmwareHexText = session.firmwareHexText ?? null;
               state.firmwareHexName = session.firmwareHexName ?? null;
               state.firmwareHexSource = session.firmwareHexSource ?? null;
               state.buildError = session.buildError ?? null;
               persistSession();
               renderApp(app);
+              afterRender();
             },
           }),
           iconButton("reset", `Discard edits (keep "${source}")`, {
@@ -63,13 +76,14 @@ export function renderRestoreBanner(app: HTMLElement, session: Session) {
               // branch above intentionally keeps).
               state.loadedFileName = baselineLoadedFileNameFromSession(session);
               state.baselineLoadedFileName = baselineLoadedFileNameFromSession(session);
-              state.activePage = validPage(session.activePage);
+              state.activePage = landingPage(session);
               state.firmwareHexText = session.firmwareHexText ?? null;
               state.firmwareHexName = session.firmwareHexName ?? null;
               state.firmwareHexSource = session.firmwareHexSource ?? null;
               state.buildError = session.buildError ?? null;
               persistSession();
               renderApp(app);
+              afterRender();
             },
           }),
         ]),
