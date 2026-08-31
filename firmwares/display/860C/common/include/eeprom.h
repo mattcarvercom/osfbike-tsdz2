@@ -194,7 +194,7 @@ typedef struct eeprom_data {
 #endif
 	uint8_t ui8_adc_throttle_min_value; // replaces ui16_service_b_time byte 0
 	uint8_t ui8_adc_throttle_max_value; // replaces ui16_service_b_time byte 1
-#ifndef SW102 
+#ifndef SW102
 	uint8_t ui8_service_a_distance_enable;
 	uint8_t ui8_service_b_distance_enable;
 #endif
@@ -273,6 +273,32 @@ typedef struct eeprom_data {
 // EEPROM_0x57_VERSION
 	uint8_t ui8_battery_field_enable;
 
+// osf.bike-only field, appended at the tail on purpose - this struct is
+// flash_read_words()/flash_write_words()'d as a raw positional memcpy (see
+// eeprom.c), so any new field MUST go at the very end, never inserted
+// between existing ones: doing that once (2026-08-23, briefly) shifted the
+// byte offset of every field declared after it, silently corrupting
+// already-flashed EEPROM data (mini_card_2_field, motor_power_bar_scale,
+// etc. all read back wrong on next boot even though nothing in Settings
+// had changed) - found via that exact symptom report, not by inspection.
+	uint8_t ui8_auto_reset_trip_on_poweron;
+
+// Continuous photocell-driven backlight (separate from the existing
+// two-preset ui8_lcd_backlight_on/off_brightness, which stay tied to
+// headlight state) - also appended at the tail, same reason as above.
+#if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
+	uint8_t ui8_auto_brightness_enabled;
+	uint8_t ui8_auto_brightness_min;
+	uint8_t ui8_auto_brightness_max;
+#endif
+
+// Trip memories -> "Auto pause" - pauses the trip timer while the wheel
+// isn't turning (default off: timer runs continuously from trip start to
+// reset, matching "a trip is when you get on the bike and when you get off"
+// rather than moving-time-only) - also appended at the tail, same reason as
+// above.
+	uint8_t ui8_trip_auto_pause_enabled;
+
 // FIXME align to 32 bit value by end of structure and pack other fields
 } eeprom_data_t;
 
@@ -302,13 +328,22 @@ void eeprom_init_defaults(void);
 #define DEFAULT_VALUE_SERVICE_B_DISTANCE							0
 //#define DEFAULT_VALUE_SERVICE_B_TIME								0
 #define DEFAULT_VALUE_SERVICE_A_DISTANCE_ENABLE						0
+#define DEFAULT_VALUE_AUTO_RESET_TRIP_ON_POWERON						0
+#define DEFAULT_VALUE_TRIP_AUTO_PAUSE_ENABLED							0
 #define DEFAULT_VALUE_SERVICE_B_DISTANCE_ENABLE						0
 #define DEFAULT_VALUE_WH_X10_TRIP_A_OFFSET							0
 #define DEFAULT_VALUE_WH_X10_TRIP_B_OFFSET							0
 #endif
 #define DEFAULT_VALUE_WH_X10_TOTAL_OFFSET							0
 #define DEFAULT_VALUE_WH_X10_OFFSET                                 0
-#define DEFAULT_VALUE_WH_X10_100_PERCENT                            5000 // default to a battery of 500 Wh
+// 2026-08-28: was 5000 (500Wh) - this drives "Battery total Wh" (Configurations
+// -> Battery), a display-local field the motor firmware has no way to report
+// (its own TARGET_MAX_BATTERY_CAPACITY lives in config.h, never transmitted
+// over UART) - same "display has its own uncoordinated default" pattern as
+// DEFAULT_VALUE_MOTOR_POWER_LIMIT_DIV25 above. Matched to this fork's real
+// pack (config.h's TARGET_MAX_BATTERY_CAPACITY 480) until a real motor-side
+// capacity readback exists.
+#define DEFAULT_VALUE_WH_X10_100_PERCENT                            4800 // default to a battery of 480 Wh
 #define DEFAULT_VALUE_WH_KM_AVERAGE_X100							500
 #define DEFAULT_VALUE_DISTANCE_FOR_WH_KM							100
 #define DEFAULT_VALUE_WH_AVG_PERCENT								50
@@ -321,7 +356,19 @@ void eeprom_init_defaults(void);
 #define DEFAULT_VALUE_MOTOR_MAX_CURRENT                             16 // 16 amps NOT USED
 #define DEFAULT_VALUE_CURRENT_MIN_ADC                               0 // 1 unit, 0.156 A
 #define DEFAULT_VALUE_BATTERY_OVERCURRENT_DELAY                     2 // * 25ms
-#define DEFAULT_VALUE_MOTOR_POWER_LIMIT_DIV25                       20 // 20 * 25 = 500
+// 2026-08-28: was 20 (500W). This is the ceiling the 860C UART protocol sends
+// the motor on every packet (state.c ui8_usart1_tx_buffer[6], non-street-mode
+// branch) - the motor takes min(this, its own config.h-derived battery
+// current max), so a display stuck at the old default silently capped real
+// hardware at 500W no matter what config.h's TARGET_MAX_BATTERY_POWER said
+// (confirmed: motor firmware correctly configured for 1200W, motor power bar
+// never exceeded ~450-500W). No editable field exists for this value on the
+// 860C config screen, unlike the legacy DZ40/VLCD5 protocol (uart_receive_
+// package()) which already derives its cap straight from config.h. Bumped to
+// match this fork's real target (1200W / 25 = 48) until a real motor->display
+// config echo-back exists to make this actually authoritative-from-the-motor
+// rather than a second hardcoded default to keep in sync by hand.
+#define DEFAULT_VALUE_MOTOR_POWER_LIMIT_DIV25                       48 // 48 * 25 = 1200
 #define DEFAULT_VALUE_TARGET_MAX_BATTERY_POWER_DIV25                20 // 20 * 25 = 500, 0 is disabled
 #define DEFAULT_VALUE_BATTERY_LOW_VOLTAGE_CUT_OFF_X10               420 // 52v battery, LVC = 42.0 (3.0 * 14)
 #define DEFAULT_VALUE_BATTERY_VOLTAGE_CALIBRATE_PERCENT_X10			1000 // displayed voltage 
@@ -410,7 +457,22 @@ void eeprom_init_defaults(void);
 #define DEFAULT_VALUE_AUTO_STARTUP_ASSIST_TIME						10 // 1.0 second, max 5.0
 #define DEFAULT_VALUE_AUTO_STARTUP_ASSIST_TIMEOUT					5  // 0.5 second, max 2.0
 #define DEFAULT_VALUE_AUTO_STARTUP_ASSIST_THRESHOLD					10 // from 5 to 20
-#define DEFAULT_VALUE_PASSWORD_ENABLED                              1	
+/* Stock Bafang firmware default is 1 (anti-tamper password-locks every
+ * Bike-menu field, e.g. wheel_perimeter - state.c's copy_rt_to_ui_vars()
+ * "Bike menu edit" gate, ~line 1069). Makes no sense for this fork's
+ * single-owner personal-bike use case, and 860C/850C's config screen (this
+ * project's own, not stock) doesn't even expose a login/disable menu entry
+ * (configscreen.c's Password/Confirm/Reset fields are SW102-only) - so a
+ * device that ever had this bit set to 1 (whether from this default or
+ * from real prior stock-firmware use before this fork was ever flashed)
+ * has literally no in-UI way to unlock it, and every Bike-menu edit just
+ * silently fails to persist. Found 2026-08-23: "Wheel circ" reverted to 0
+ * every time despite editing it, tracked down to this. Changed default to
+ * 0 - an already-flashed device with the old default/stale-1 stored still
+ * needs a real "Reset to defaults" (Configuration -> Display) to actually
+ * clear it, since reflashing new compiled defaults doesn't touch existing
+ * EEPROM content. */
+#define DEFAULT_VALUE_PASSWORD_ENABLED                              0
 #define DEFAULT_VALUE_PASSWORD_CHANGED                              0
 #define DEFAULT_VALUE_RESET_PASSWORD	                            0
 #define DEFAULT_VALUE_PASSWORD                                      1000
@@ -431,14 +493,23 @@ void eeprom_init_defaults(void);
 #define DEFAULT_VALUE_LCD_BACKLIGHT_ON_BRIGHTNESS                   80 //
 #define DEFAULT_VALUE_LCD_BACKLIGHT_OFF_BRIGHTNESS                  40 //
 #else
+// "ON"/"OFF" name whether the bike's own lights are on, not the backlight -
+// OFF (daytime, no lights) is the default state and used to dim to 80%.
+// 2026-08-29: no reason to default dimmer than max in daylight - the rider
+// can already dim it at night via the lights toggle (see the "ON" default
+// below), and there's no lights hardware wired to this motor controller to
+// even engage that path unintentionally.
 #define DEFAULT_VALUE_LCD_BACKLIGHT_ON_BRIGHTNESS                   20 //
-#define DEFAULT_VALUE_LCD_BACKLIGHT_OFF_BRIGHTNESS                  80
+#define DEFAULT_VALUE_LCD_BACKLIGHT_OFF_BRIGHTNESS                  100
 #endif
 
 #define DEFAULT_VALUE_LIGHT_SENSOR_ENABLED							0 // disabled
 #if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
 #define DEFAULT_VALUE_LIGHT_SENSOR_SENSITIVITY	                    60 // 100 = 100%
 #define DEFAULT_VALUE_LIGHT_SENSOR_HYSTERESIS	                    10 // MAX 20%
+#define DEFAULT_VALUE_AUTO_BRIGHTNESS_ENABLED						0 // disabled
+#define DEFAULT_VALUE_AUTO_BRIGHTNESS_MIN							20 // %, used at darkest reading
+#define DEFAULT_VALUE_AUTO_BRIGHTNESS_MAX							100 // %, used at brightest reading
 #endif
 
 #define DEFAULT_VALUE_ODOMETER_X10                                  0
@@ -446,8 +517,24 @@ void eeprom_init_defaults(void);
 #define DEFAULT_VALUE_LIGHTS_ENABLED				                1 
 #define DEFAULT_VALUE_X_AXIS_SCALE                                  0 // 15m
 #define DEFAULT_STREET_MODE_FUNCTION_ENABLE                         1 // enabled
-#define DEFAULT_STREET_MODE_ENABLE_AT_STARTUP                       1 // enabled
-#define DEFAULT_STREET_MODE_ENABLE                                  1 // enabled
+// 2026-08-28: both of these used to default to 1 (Bafang's stock EU-pedelec
+// assumption: legally-limited "street" mode active out of the box). This
+// fork is an off-road-only private build with no legal speed/power limit to
+// respect - real-hardware bring-up traced the "motor power never exceeds
+// ~450W" complaint here: DEFAULT_VALUE_MOTOR_POWER_LIMIT_DIV25 above (the
+// real, intended ceiling) is only what gets transmitted when street mode is
+// OFF (see rt_send_tx_package()'s FRAME_TYPE_PERIODIC case, state.c) - with
+// street mode ON by default, every boot (and every "Reset to Defaults", since
+// that also reloads this same default) silently sends
+// DEFAULT_STREET_MODE_POWER_LIMIT_DIV25 (500W) instead, regardless of how
+// high the real ceiling was configured. Confirmed on real hardware: bumping
+// the real ceiling's default and doing a full "Reset to Defaults" had zero
+// effect on the rider-felt power cap, because street mode was still silently
+// re-enabling itself on every reset. See configscreen.c's "Riding mode"
+// field (ui_vars.ui8_street_mode_enabled) for the user-facing toggle - now
+// also fixed to label its two states the right way around.
+#define DEFAULT_STREET_MODE_ENABLE_AT_STARTUP                       0 // disabled
+#define DEFAULT_STREET_MODE_ENABLE                                  0 // disabled
 #define DEFAULT_STREET_MODE_SPEED_LIMIT                             25 // 25 km/h
 #define DEFAULT_STREET_MODE_POWER_LIMIT_DIV25                       20 // MAX 500W --> 500 / 25 = 20
 #define DEFAULT_STREET_MODE_THROTTLE_ENABLE                         0 // disabled
@@ -489,8 +576,16 @@ void eeprom_init_defaults(void);
 #define DEFAULT_VALUE_TEMP_MIN_WARN_OFFSET                          (-10)
 #define DEFAULT_VALUE_TEMP_MAX_WARN_OFFSET                          (-20)
 #define DEFAULT_VALUE_TEMP_MAX_CRIT_OFFSET                          (-10)
-#define DEFAULT_VALUE_DISPLAY_TEMP_ICON_ENABLED                     1
-#define DEFAULT_VALUE_DISPLAY_TEMP_VALUE_ENABLED                    1
+// 0 (not 1): this platform has no motor temperature sensor wired by default
+// (config.h's ENABLE_TEMPERATURE_LIMIT/TEMPERATURE_SENSOR_TYPE are both 0) -
+// showing a "-- C" placeholder + icon on a freshly-flashed/reseeded display
+// with nothing behind it was reported as an unwanted default. Still real,
+// user-editable fields (configscreen.c's "Display Temp Icon"/"Display Temp
+// Value", Configurations -> Display), just off until someone wires a sensor
+// and turns them on. wasm-display-sim/sim_glue.c force-enables both anyway,
+// since the sim always has fake temperature data to demo.
+#define DEFAULT_VALUE_DISPLAY_TEMP_ICON_ENABLED                     0
+#define DEFAULT_VALUE_DISPLAY_TEMP_VALUE_ENABLED                    0
 
 // Indices into MiniCardOption (theme_osf_modern.c) - 0=Cadence, 1=Trip, so
 // the two mini-cards' defaults match the fixed layout they replaced.

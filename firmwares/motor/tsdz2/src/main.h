@@ -337,9 +337,17 @@ HALL_COUNTER_OFFSET_UP:    29 -> 44
 // UART
 #if ENABLE_860C_LVGL_UART
 // CRC16 variable-length protocol: 88 = largest display->motor frame (CONFIGURATIONS),
-// 29 = display receive capacity (see firmwares/display/860C/common/include/uart.h).
+// 35 = display receive capacity (see firmwares/display/860C/common/include/uart.h).
+// 2026-08-28: TX was 29 - COMM_FRAME_TYPE_PERIODIC (ebike_app.c) grew 6 bytes
+// (wheel perimeter, battery current max, target max power, battery capacity)
+// so the display can show/use the motor's real config instead of its own
+// locally-configured guesses. Must match the display's
+// UART_NUMBER_DATA_BYTES_TO_RECEIVE exactly - the motor always sends this
+// many bytes for every frame type (uart.c's TX ISR has no per-frame-type
+// length), so a mismatch here breaks display parsing for ALL frame types,
+// not just the one that grew.
 #define UART_RX_BUFFER_LEN   						88
-#define UART_TX_BUFFER_LEN							29
+#define UART_TX_BUFFER_LEN							35
 #else
 // Fixed 7-byte frame, single-byte sum checksum (OEM VLCD5/VLCD6/XH18/850C/EKD01).
 #define UART_RX_BUFFER_LEN   						7

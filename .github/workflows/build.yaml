@@ -101,12 +101,16 @@ jobs:
 
   Static-analysis:
     runs-on: ubuntu-latest
-    # No empirical runtime yet - this job (cppcheck built from source, then
-    # --check-level=exhaustive --enable=all over the whole firmware tree) has
-    # never actually run to completion before (earlier pushes on this branch
-    # kept getting cancelled mid-run by the concurrency group above). 30 min
-    # is a guess at a generous ceiling; tighten once a real duration is known.
-    timeout-minutes: 30
+    # 2026-08-31: first run to actually survive past the concurrency-group
+    # cancellations that hid this before - it hit the old 30-minute ceiling
+    # while still exhaustively checking ebike_app.c's own #ifdef combinations
+    # (the other 13 firmware files together took well under a minute; that
+    # file alone is the long pole, and hadn't finished at 30min). Bumped to a
+    # generous 90 min rather than guessing precisely - tighten once a run
+    # actually completes and a real duration is known. If 90 min still isn't
+    # enough, the next lever is --check-level=normal instead of exhaustive
+    # (real coverage tradeoff, not done here without asking).
+    timeout-minutes: 90
     permissions:
       contents: read
       pull-requests: write

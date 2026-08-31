@@ -51,6 +51,67 @@ function loadProMode(): boolean {
   }
 }
 
+// Same "own key, own load function, module-eval-time initializer" pattern as
+// PRO_MODE_KEY just above, and for the same reason: which display board
+// revision/firmware source you're bench-testing against is a tool
+// preference tied to this browser/adapter setup, not part of a loaded
+// .tsdz2.json config - it shouldn't reset to the default every time the tab
+// reloads (reported 2026-08-23: wanted the target picker to remember its
+// last selection across sessions).
+const DISPLAY_TARGET_KEY = "tsdz2-configurator-display-target";
+const VALID_DISPLAY_TARGETS: AppState["displayTarget"][] = [
+  "860C_V13",
+  "860C_V12",
+  "860C",
+  "850C",
+  "850C_2021",
+  "SW102",
+];
+
+function loadDisplayTarget(): AppState["displayTarget"] {
+  try {
+    const raw = localStorage.getItem(DISPLAY_TARGET_KEY);
+    if (raw && (VALID_DISPLAY_TARGETS as string[]).includes(raw)) return raw as AppState["displayTarget"];
+  } catch {
+    // localStorage full/unavailable/disabled - fall through to the default below
+  }
+  return "860C_V13";
+}
+
+/** Sets state.displayTarget and persists it - the only way any code should change it, so the localStorage write and the live state field never drift apart (same shape as setProMode below). */
+export function setDisplayTarget(target: AppState["displayTarget"]): void {
+  state.displayTarget = target;
+  try {
+    localStorage.setItem(DISPLAY_TARGET_KEY, target);
+  } catch {
+    // localStorage full/unavailable/disabled - a convenience, not required
+  }
+}
+
+// Same reasoning/pattern again: whether the display-flash release picker
+// shows emmebrusa/Color_LCD_860C's stock releases (releases/display/legacy/)
+// alongside this project's own osf.bike builds, or hides them by default -
+// reported 2026-08-23: "should always default to osf.bike firmwares in the
+// picker and not an emmebrusa one", with an explicit toggle to opt back in.
+const SHOW_LEGACY_DISPLAY_FIRMWARES_KEY = "tsdz2-configurator-show-legacy-display-firmwares";
+
+function loadShowLegacyDisplayFirmwares(): boolean {
+  try {
+    return localStorage.getItem(SHOW_LEGACY_DISPLAY_FIRMWARES_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function setShowLegacyDisplayFirmwares(enabled: boolean): void {
+  state.showLegacyDisplayFirmwares = enabled;
+  try {
+    localStorage.setItem(SHOW_LEGACY_DISPLAY_FIRMWARES_KEY, String(enabled));
+  } catch {
+    // localStorage full/unavailable/disabled - a convenience, not required
+  }
+}
+
 export interface AppState {
   values: FieldValues;
   /** Snapshot taken at the last known-on-disk point (initial defaults, import, load, reset, or a completed Save As) - the reference "changed field" highlighting and the unsaved-changes prompt compare against. */
@@ -84,8 +145,8 @@ export interface AppState {
   building: boolean;
   backingUp: boolean;
   restoring: boolean;
-  /** Display firmware target selection - see render/display-flash-page.ts. Determines which WASM entry point (stm32_flash_write_hex vs nrf51_flash_write_hex) a flash uses. */
-  displayTarget: "860C" | "850C" | "850C_2021" | "SW102";
+  /** Display firmware target selection - see render/display-flash-page.ts. Determines which WASM entry point (stm32_flash_write_hex vs nrf51_flash_write_hex) a flash uses, and (for the 3 860C pin-revision variants) which built-in releases the picker offers. Persisted separately (see DISPLAY_TARGET_KEY below) - a tool/bench preference, not part of the loaded firmware config, same reasoning as proMode. */
+  displayTarget: "860C_V13" | "860C_V12" | "860C" | "850C" | "850C_2021" | "SW102";
   displayHexName: string | null;
   displayHexText: string | null;
   displayFlashing: boolean;
@@ -96,6 +157,8 @@ export interface AppState {
   displayBinName: string | null;
   displayBinBytes: Uint8Array | null;
   uartFlashing: boolean;
+  /** Whether motor-handshake.ts's emulator is currently running on uartPort - see render/display-flash-page.ts. Mutually exclusive with flashing (the emulator needs the port reopened at a different baud rate than the bootloader protocol), so every flash control disables while this is true. */
+  uartMotorHandshakeActive: boolean;
   /**
    * Live progress lines for the async WebUSB/WebSerial/build operations
    * below. Live in state, not local DOM nodes, for the same reason as
@@ -127,6 +190,8 @@ export interface AppState {
    * state, not loaded config.
    */
   proMode: boolean;
+  /** Whether the display-flash release picker also offers emmebrusa/Color_LCD_860C's stock releases (releases/display/legacy/), not just this project's own osf.bike builds - see setShowLegacyDisplayFirmwares above for persistence. */
+  showLegacyDisplayFirmwares: boolean;
 }
 
 export const state: AppState = {
@@ -151,7 +216,7 @@ export const state: AppState = {
   building: false,
   backingUp: false,
   restoring: false,
-  displayTarget: "860C",
+  displayTarget: loadDisplayTarget(),
   displayHexName: null,
   displayHexText: null,
   displayFlashing: false,
@@ -160,6 +225,7 @@ export const state: AppState = {
   displayBinName: null,
   displayBinBytes: null,
   uartFlashing: false,
+  uartMotorHandshakeActive: false,
   buildLog: [],
   flashLog: [],
   backupLog: [],
@@ -167,6 +233,7 @@ export const state: AppState = {
   displayFlashLog: [],
   uartFlashLog: [],
   proMode: loadProMode(),
+  showLegacyDisplayFirmwares: loadShowLegacyDisplayFirmwares(),
 };
 
 export const controls = buildControls();

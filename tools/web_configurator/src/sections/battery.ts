@@ -133,7 +133,13 @@ export const fields: Record<string, ExplicitFieldMeta> = {
     section: "battery",
     kind: "text",
     tooltip:
-      "Per-cell voltage above which the state-of-charge display auto-resets to 99.9% at power-on, if the battery is fully charged. Recommended 4.10-4.15V; lower values cause premature resets on a partially-charged battery.",
+      'Per-cell voltage above which the state-of-charge display auto-resets to 99.9% at power-on, if the battery is fully charged. Recommended 4.10-4.15V; lower values cause premature resets on a partially-charged battery. Only affects DZ40/VLCD5\'s own SOC-bar reset - the 860C has a completely separate, on-device Wh-based battery gauge with its own "Reset at voltage" field (Configurations -> Battery on the display itself, not here), unrelated to this one.',
+    dependsOn: (v) => v.displayType860C !== true,
+    hint: (v) => {
+      const cells = v.batteryCellsNumber;
+      const perCell = Number(v.liIonCellResetSocPercent ?? 0);
+      return typeof cells === "number" && perCell > 0 ? `= ${(cells * perCell).toFixed(1)}V pack voltage` : null;
+    },
   },
   liIonCellVoltsFull: {
     label: "Cell volts: full",

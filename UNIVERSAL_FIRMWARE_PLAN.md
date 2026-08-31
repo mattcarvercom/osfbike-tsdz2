@@ -939,6 +939,61 @@ PR. (Formerly numbered "Phase 2" before the 2026-08-18 restructure - same conten
 same deferred/contingent status, just renumbered so Phases 2/3's real, shipped work
 isn't sandwiched behind it.)
 
+#### Design principle: motor-bus architecture, not a monolith (added 2026-08-29)
+
+The motor and display are already, physically, exactly what an automotive ECU network
+is: separate MCUs, separate flash, separately versioned, talking over a wire. What this
+fork doesn't have yet is a real *bus protocol* - the actual "each subsystem is its own
+plugin" pattern automotive networks use is a properly negotiated interface between
+nodes, not literal runtime-loadable code inside any one node. That distinction matters
+concretely on this hardware: the STM8S105 (8KB RAM, tens of KB flash, no MMU, no dynamic
+linker) cannot do automotive-style hot-swappable ECU firmware modules - there's no
+runtime loader to swap into. What it *can* do is compile-time-pluggable components with
+clean interface boundaries, which gets most of the same benefit (easy override, easy
+testing, independently versioned pieces) without needing infrastructure this chip
+doesn't have room for.
+
+Real motivating evidence, not a hypothetical: the 2026-08-28/29 telemetry-extension work
+(COMM_FRAME_TYPE_PERIODIC growing 6 bytes) needed a hand-bumped `UART_TX_BUFFER_LEN`
+constant on the motor, a matching hand-bumped `UART_NUMBER_DATA_BYTES_TO_RECEIVE` on the
+display, and a hardcoded `if (patch >= 53)` literal gate guarding the new field parsing -
+three separate places that all have to be kept in lockstep by hand, with no mechanism
+that would have caught a mismatch other than careful code review. Real-hardware bring-up
+the same night also surfaced a related, adjacent bug this pattern makes easy to miss:
+the 860C protocol's periodic-frame power-cap byte (`ebike_app.c`'s
+`ui8_target_battery_max_power_div25 = ui8_rx_buffer[6]`) had no independent ceiling check
+against the motor's own `TARGET_MAX_BATTERY_POWER` at all, unlike the DZ40/VLCD5 protocol
+path (`uart_receive_package()`'s `ui32_adc_battery_power_max_x10_array`) which already
+treats the motor's own config as authoritative - two protocols in the same firmware
+disagreeing about who owns the ceiling. Both problems are instances of the same root
+cause: no real interface contract between the two sides, just parallel hand-maintained
+assumptions.
+
+Three concrete, buildable pieces for this phase, in roughly increasing order of effort:
+
+1. **Storage backend as a real interface, not eeprom.c called directly.** A small
+   `storage_read(key)` / `storage_write(key, val)` boundary with the STM8's on-chip
+   EEPROM as the only implementation today - but a boundary clean enough that the
+   `tests/` cffi harness (which already stubs UART2 registers to keep hardware access out
+   of native test builds - see this repo's own `CLAUDE.md`) could substitute a second,
+   in-memory implementation for fast unit tests, and a future external I2C/SPI EEPROM
+   board would be a second real implementation, not a fork of `eeprom.c`.
+2. **A real capability-negotiation handshake, replacing fixed version literals.** Instead
+   of a display and motor each hardcoding a `major.minor.patch` number and refusing to
+   talk on mismatch (today's `MOTOR_INIT_GOT_MOTOR_FIRMWARE_VERSION` gate, `state.c`) or
+   silently trusting an unchecked byte (this session's `patch >= 53` gate, and the missing
+   power-cap ceiling check above), the motor should advertise what it actually supports
+   (which optional fields, which frame variant) and the display should negotiate against
+   that - "the bus" being versioned per-capability rather than per-monolithic-release
+   number. This is the direct fix for the exact class of bug this session spent hours on.
+3. **Display protocols as runtime-dispatched handlers, one flash image** - already
+   planned below ("Universal display support"); this principle is *why* that item exists,
+   not a separate one. Depends on (2) for the negotiation, not just the dispatch table.
+
+Everything else in this phase (EEPROM schema/versioning, the buckets below) already
+follows this same shape - this section exists so the *reason* is written down once,
+rather than re-derived per bullet.
+
 - **Groundwork / measurement.** Enable `TIME_DEBUG`, get real loop-timing numbers on
   actual hardware. Pull in the interrupt-driven UART TX fix from PR #144. Confirm the
   STM8S105x6 EEPROM size against the real datasheet (currently an assumed figure).
@@ -995,7 +1050,21 @@ isn't sandwiched behind it.)
   `m_configuration_variables` pattern. Phase 1's config editor schema becomes the
   source of truth for both the form UI and the EEPROM layout at this point.
 - **Universal display support** — protocol autodetection + `#if`-to-runtime-dispatch
-  restructuring for `ENABLE_VLCD5/VLCD6/XH18/850C/EKD01`.
+  restructuring for `ENABLE_VLCD5/VLCD6/XH18/850C/EKD01/ENABLE_860C_LVGL_UART` (the last
+  one added 2026-08-19, after this list was originally written). **Baud rate has to be
+  part of that dispatch, not just frame format** - found 2026-08-24 real-hardware
+  bring-up: `uart.c`'s `uart2_init()` hardcodes UART2's baud rate with a single
+  `#if ENABLE_860C_LVGL_UART` (19200 for the 860C/850C's own fixed UART1 rate, 9600 for
+  every stock/DZ40-style display), completely separate from wherever this future
+  autodetection dispatch would live. A real runtime autodetect scheme means either
+  hardware-autobaud (not available on the STM8S105's UART2 peripheral) or a
+  cycle-and-listen approach (try one baud/protocol pairing for a timeout window, fall
+  back to the other, repeat) - workable, but doubles the coincidental-CRC-false-positive
+  exposure already discussed elsewhere in this doc (now evaluated against two candidate
+  protocols instead of one), adds real connect-time delay, and needs both protocols'
+  full frame parse/build logic compiled into the same binary simultaneously (real flash
+  cost on the already-constrained STM8S105) rather than only ever one of them per build,
+  as today.
 - **Voltage-class selection** — explicit one-time EEPROM-backed choice replacing
   compile-time `MOTOR_TYPE`.
 - **Watchdog + overvoltage additions** — independent, can run in parallel with the rest

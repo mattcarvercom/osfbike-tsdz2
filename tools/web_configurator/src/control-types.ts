@@ -43,7 +43,7 @@ export const SECTIONS: Section[] = [
         ? "Varstrom motor kits paired with a DZ40 display don't come with a wire or output for lights - the controller's lights pin has no connector routed out to the harness. A physical headlight needs custom modification (opening the controller and wiring to it directly) even with Lights enabled turned on below."
         : null,
   },
-  { id: "assist", title: "Assist levels" },
+  { id: "assist", title: "Assist modes & levels" },
   { id: "walk-cruise", title: "Walk assist & cruise control" },
   { id: "throttle", title: "Throttle & brake" },
   { id: "startup-boost", title: "Startup boost & smooth start" },

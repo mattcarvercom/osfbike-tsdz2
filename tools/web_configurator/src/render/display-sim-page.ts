@@ -77,13 +77,17 @@ const telemetry = {
   // "Trigger fault" button pushes a selected dropdown value through.
   faultCode: 0,
   unitsImperial: loadUnitsImperial(),
+  // Sim-only override for the status-bar wrench icon (theme_osf_modern.c) -
+  // see sim.setServiceDue()'s own doc comment. Off by default, matching the
+  // real firmware default (both A/B service disabled -> icon never shows).
+  serviceDue: false,
 };
 
 // Every numeric (range-slider) telemetry field, keyed for the Randomize
 // toggle below - deliberately excludes the boolean/enum-ish fields (units/
 // lights/fault): the user asked for sliders to move on their own, not for
 // those to flip randomly too.
-type NumericTelemetryKey = Exclude<keyof typeof telemetry, "lights" | "faultCode" | "unitsImperial">;
+type NumericTelemetryKey = Exclude<keyof typeof telemetry, "lights" | "faultCode" | "unitsImperial" | "serviceDue">;
 
 interface RandomizableSlider {
   key: NumericTelemetryKey;
@@ -184,6 +188,7 @@ function applyTelemetry() {
   sim.setLights(telemetry.lights);
   sim.setError(telemetry.faultCode);
   sim.setUnitsImperial(telemetry.unitsImperial);
+  sim.setServiceDue(telemetry.serviceDue);
 }
 
 // The top-right clock is a separate field from the firmware's own "up
@@ -460,6 +465,13 @@ export function renderDisplaySimPage(app: HTMLElement): HTMLElement {
   const lightsToggle = toggle("Lights", telemetry.lights, (v) => (telemetry.lights = v));
   const lightsCheckbox = lightsToggle.querySelector("input") as HTMLInputElement;
 
+  // One-way override only (JS -> WASM, no readback) - unlike Lights/Units
+  // above, nothing in the sim can flip this back on its own within a normal
+  // session (see sim_set_service_due()'s own doc comment on why "off" sets
+  // a large distance rather than just disabling), so there's nothing to
+  // poll for.
+  const serviceToggle = toggle("Service due", telemetry.serviceDue, (v) => (telemetry.serviceDue = v));
+
   // Two-button Imperial/Metric segmented control (dom.ts's own
   // renderToggleGroup(), the same component radio/intSelect fields with <=3
   // options use elsewhere in this app), not a checkbox like the other
@@ -532,6 +544,7 @@ export function renderDisplaySimPage(app: HTMLElement): HTMLElement {
   const sliders = el("div", { className: "display-sim-sliders" }, [
     unitsToggle,
     lightsToggle,
+    serviceToggle,
     slider("Battery SOC", 0, 100, telemetry.batterySoc, (v) => (telemetry.batterySoc = v), "%", "batterySoc"),
     slider("Assist level", 0, 9, telemetry.assistLevel, (v) => (telemetry.assistLevel = v), "", "assistLevel"),
     slider("Speed", 0, 600, telemetry.speedX10, (v) => (telemetry.speedX10 = v), " (x0.1 km/h)", "speedX10"),
@@ -556,17 +569,7 @@ export function renderDisplaySimPage(app: HTMLElement): HTMLElement {
     // setMotorPower() doc comment. Same torque-ripple tuning as Human
     // power above - motor assist tracks pedal torque, not a separate
     // slow-changing quantity.
-    slider(
-      "Motor power",
-      0,
-      1000,
-      telemetry.motorPower,
-      (v) => (telemetry.motorPower = v),
-      " W",
-      "motorPower",
-      2.5,
-      22,
-    ),
+    slider("Motor power", 0, 500, telemetry.motorPower, (v) => (telemetry.motorPower = v), " W", "motorPower", 2.5, 22),
     // Real motor telemetry (rt_vars.ui16_battery_voltage_filtered_x10) that
     // feeds state.c's voltage-based SOC-percent estimate - but only when
     // ui_vars.ui8_battery_soc_percent_calculation is set to "volts", and

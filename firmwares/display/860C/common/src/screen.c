@@ -786,7 +786,13 @@ static void changeEditable(bool increment, bool x10) {
 		  step *= 10;
 
 		v += step * (increment ? 1 : -1);
-		if (v < f->editable.number.min_value) // loop around
+		if (f->editable.number.no_wrap) {
+			if (v < (int)f->editable.number.min_value)
+				v = f->editable.number.min_value;
+			else if (v > (int)f->editable.number.max_value)
+				v = f->editable.number.max_value;
+		}
+		else if (v < f->editable.number.min_value) // loop around
 			v = f->editable.number.max_value;
 		else if (v > f->editable.number.max_value)
 			v = f->editable.number.min_value;

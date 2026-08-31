@@ -76,6 +76,7 @@ const eeprom_data_t m_eeprom_data_defaults = {
   .ui8_auto_startup_assist_time = DEFAULT_VALUE_AUTO_STARTUP_ASSIST_TIME,
   .ui8_auto_startup_assist_timeout = DEFAULT_VALUE_AUTO_STARTUP_ASSIST_TIMEOUT,
   .ui8_auto_startup_assist_threshold = DEFAULT_VALUE_AUTO_STARTUP_ASSIST_THRESHOLD,
+  .ui8_trip_auto_pause_enabled = DEFAULT_VALUE_TRIP_AUTO_PAUSE_ENABLED,
   .ui16_battery_low_voltage_cut_off_x10 = DEFAULT_VALUE_BATTERY_LOW_VOLTAGE_CUT_OFF_X10,
   .ui16_battery_voltage_calibrate_percent_x10 = DEFAULT_VALUE_BATTERY_VOLTAGE_CALIBRATE_PERCENT_X10,
   .ui8_assist_level_factor = {
@@ -661,6 +662,8 @@ void eeprom_init_variables(void) {
 		m_eeprom_data.ui8_auto_startup_assist_time;
 	ui_vars->ui8_auto_startup_assist_timeout =
 		m_eeprom_data.ui8_auto_startup_assist_timeout;
+	ui_vars->ui8_trip_auto_pause_enabled =
+		m_eeprom_data.ui8_trip_auto_pause_enabled;
 	ui_vars->ui8_auto_startup_assist_threshold =
 		m_eeprom_data.ui8_auto_startup_assist_threshold;
 	ui_vars->ui16_battery_low_voltage_cut_off_x10 =
@@ -1070,6 +1073,8 @@ void eeprom_write_variables(void) {
 		ui_vars->ui8_auto_startup_assist_time;
 	m_eeprom_data.ui8_auto_startup_assist_timeout =
 		ui_vars->ui8_auto_startup_assist_timeout;
+	m_eeprom_data.ui8_trip_auto_pause_enabled =
+		ui_vars->ui8_trip_auto_pause_enabled;
 	m_eeprom_data.ui8_auto_startup_assist_threshold =
 		ui_vars->ui8_auto_startup_assist_threshold;
 	m_eeprom_data.ui16_battery_low_voltage_cut_off_x10 =

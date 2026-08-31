@@ -124,6 +124,32 @@ ODFLAGS = -S
 
 include ../../common/Makefile.common
 
+# Release filename for `make release` below - matches the naming convention
+# already used under releases/display/, with DISPLAY_BUILD_DATE inserted
+# right before the extension (after "bootloader", before ".bin") so a
+# rebuild that didn't get DISPLAY_FIRMWARE_PATCH bumped still produces a
+# visibly different file - same motivation as that variable's own comment
+# in Makefile.common, just at the filename level instead of (in addition
+# to) the boot-screen level. Must come after the include above -
+# DISPLAY_FIRMWARE_MAJOR/MINOR/PATCH/DISPLAY_BUILD_DATE are defined there.
+ifeq ($(DISPLAY_VERSION), 850C_BOOTLOADER)
+  RELEASE_BASENAME := 850C-$(DISPLAY_FIRMWARE_MAJOR).$(DISPLAY_FIRMWARE_MINOR).$(DISPLAY_FIRMWARE_PATCH)+bootloader
+endif
+ifeq ($(DISPLAY_VERSION), 850C_2021_BOOTLOADER)
+  RELEASE_BASENAME := 850C_2021-$(DISPLAY_FIRMWARE_MAJOR).$(DISPLAY_FIRMWARE_MINOR).$(DISPLAY_FIRMWARE_PATCH)+bootloader
+endif
+ifeq ($(DISPLAY_VERSION), 860C_BOOTLOADER)
+  RELEASE_BASENAME := 860C-$(DISPLAY_FIRMWARE_MAJOR).$(DISPLAY_FIRMWARE_MINOR).$(DISPLAY_FIRMWARE_PATCH)+bootloader
+endif
+ifeq ($(DISPLAY_VERSION), 860C_V12_BOOTLOADER)
+  RELEASE_BASENAME := 860C-$(DISPLAY_FIRMWARE_MAJOR).$(DISPLAY_FIRMWARE_MINOR).$(DISPLAY_FIRMWARE_PATCH)+V12.bootloader
+endif
+ifeq ($(DISPLAY_VERSION), 860C_V13_BOOTLOADER)
+  RELEASE_BASENAME := 860C-$(DISPLAY_FIRMWARE_MAJOR).$(DISPLAY_FIRMWARE_MINOR).$(DISPLAY_FIRMWARE_PATCH)+V13.bootloader
+endif
+RELEASE_DIR := ../../../../../releases/display
+RELEASE_FILE := $(RELEASE_DIR)/$(RELEASE_BASENAME).$(DISPLAY_BUILD_DATE).bin
+
 COMMONDIR = ../../common/src
 OBJDIR = _build
 CUSTOM_SOURCES=$(shell find spl ugui_driver *.c -type f -iname '*.c') 
@@ -151,13 +177,48 @@ OPENOCD := '$(OPENOCD_PATH)/$(OPENOCD_BIN)' -f $(OPENOCD_PATH)/../scripts/interf
 
 all: main.bin size
 
+# Builds and copies main.bin straight into releases/display/ under its real,
+# date-stamped release name - replaces the old workflow of manually cp-ing
+# main.bin to a hand-typed name after every build, which is exactly how a
+# stale/wrongly-named release file happens.
+#
+# RELEASE_BASENAME guard: DISPLAY_VERSION being unset doesn't hit the
+# DISPLAY_VERSION_DEFINED $(error) above (it silently defaults to plain
+# 850C for `make`/`make all`, which is intentional) - but none of the
+# RELEASE_BASENAME ifeq blocks above match that default either, so without
+# this check `make release` with no DISPLAY_VERSION would silently write
+# releases/display/.<date>.bin (empty basename). Checked in the recipe
+# itself, not as a top-level $(error), so plain `make`/`make all` (which
+# never touches RELEASE_BASENAME at all) stays unaffected.
+release: main.bin
+	@if [ -z "$(RELEASE_BASENAME)" ]; then \
+		echo "error: RELEASE_BASENAME is empty - DISPLAY_VERSION='$(DISPLAY_VERSION)' didn't match any *_BOOTLOADER value. Pass DISPLAY_VERSION=<target>_BOOTLOADER explicitly for 'make release', e.g. DISPLAY_VERSION=860C_V13_BOOTLOADER." >&2; \
+		exit 1; \
+	fi
+	@mkdir -p $(RELEASE_DIR)
+	cp main.bin $(RELEASE_FILE)
+	@echo "release: $(RELEASE_FILE)"
+
 # Ignore - useful for debugging makefiles
 test:
 	echo objs $(OBJECTS)
 
-clean: 
+clean:
 	rm -f main.lst main.elf main.bin
 	rm -rf $(OBJDIR) .deps
+	# $(OBJDIR)/$(x).o for a common/src file (x = ../../common/src/foo) is
+	# $(OBJDIR)/../../common/src/foo.o - the embedded ".." isn't lexically
+	# collapsed by make/gcc, so it actually lands two real directories
+	# outside $(OBJDIR) (../common/src/, a sibling of this src/ dir), not
+	# under it. `rm -rf $(OBJDIR)` above never touches that, so switching
+	# DISPLAY_VERSION between builds without editing a common/ file reused a
+	# stale object built under a DIFFERENT target's -D flags - found
+	# 2026-08-23 chasing a bogus "undefined reference to
+	# adc_light_sensor_get" on an 850C build (that guard was already
+	# correct; the object make reused for the same file just predated it
+	# being built with -DDISPLAY_850C at all). Same risk applies to every
+	# common/src file for every target, not just this one symptom.
+	rm -rf ../common
 
 flash_serial: main.bin 
 	$(STM32FLASH) main.bin
@@ -184,6 +245,8 @@ main.bin: main.elf
 	@echo "...copying"
 	$(CP) $(CPFLAGS) main.elf main.bin
 	$(OD) $(ODFLAGS) main.elf > main.lst
+	@echo "...appending boot-time integrity CRC"
+	python3 crc16-append.py main.bin
 
 main.elf: $(OBJECTS) $(LVGL_OBJECTS) startup_stm32f10x_md.o
 	@echo "..linking"

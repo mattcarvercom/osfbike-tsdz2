@@ -70,7 +70,9 @@ static uint16_t m_assist_level_change_timeout = 0;
 uint8_t ui8_m_wheel_speed_integer;
 uint8_t ui8_m_wheel_speed_decimal;
 
-static uint8_t ui8_walk_assist_timeout = 0;
+// Real elapsed-ms since walk assist was last actively held, not a
+// call-count timeout - see walk_assist_state()'s own comment for why.
+static uint32_t ui32_walk_assist_release_start_ms = 0;
 static uint8_t ui8_startup_assist_man_flag = 0;
 static uint8_t ui8_startup_assist_man_timeout = 0;
 static uint8_t ui8_startup_assist_man_delay_flag = 0;
@@ -898,6 +900,7 @@ void screen_clock(void) {
 #endif
 #if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
 	auto_on_off_lights();
+	auto_adjust_brightness();
 #endif
 	history_errors_reset();
     DisplayResetToDefaults();
@@ -1548,13 +1551,44 @@ void time(void) {
 #endif
 }
 
+// Release delay, as a real elapsed-ms comparison. This used to be a
+// call-count timeout (ui8_walk_assist_timeout, decremented once per
+// lcd_main_screen() call, cleared at 4 to mean "0.4s" assuming that
+// function runs every 100ms). That assumption only holds if screen_clock()
+// itself gets invoked roughly every 100ms of real wall time - but it's
+// driven by the same main-loop iteration dashboard_theme_tick() runs from,
+// and buttons.c's own TIME_1..TIME_4 history (see that file's comment)
+// already found and fixed the same class of bug: the OSF Modern theme's
+// per-tick LVGL rendering is heavy enough on real 860C hardware to push
+// real loop iteration time well past what a count-based timeout assumes
+// (documented 4-6x inflation there). screen_clock()'s `>= 100` gate only
+// enforces a minimum spacing between ticks, never a maximum - so a slower
+// real loop means each "0.1s" count-unit actually represents however long
+// the real loop takes, not 100ms. Real-hardware bring-up 2026-08-29:
+// walk assist took ~2s to disengage after releasing the button, matching
+// this exact inflation factor (4 counted units x ~500ms real loop period).
+// Fixed the same way buttons.c was: compare a real timestamp instead of
+// counting calls, initially at the old code's intended 400ms.
+//
+// 2026-08-30: real-hardware bring-up again - even 400ms still read as a
+// noticeable lag after releasing the button (not the original ~2s bug, just
+// a value that's still too conservative for what this feature needs). No
+// hardware debounce is required for correctness here - the DOWN button's own
+// physical bounce is already handled upstream by buttons.c's raw GPIO
+// read/state machine, this timeout only exists to smooth over holding DOWN
+// through a real momentary reason to want assist to keep running - so this
+// can drop much closer to the tick rate itself instead of a subjectively
+// "round" fraction of a second.
+#define WALK_ASSIST_RELEASE_TIMEOUT_MS 100
+
 void walk_assist_state(void) {
 // kevinh - note on the sw102 we show WALK in the box normally used for BRAKE display - the display code is handled there now
   if ((ui_vars.ui8_walk_assist_feature_enabled)||(ui_vars.ui8_cruise_feature_enabled)) {
     // if down button is still pressed
     if (ui_vars.ui8_walk_assist && buttons_get_down_state()) {
-      ui8_walk_assist_timeout = 4; // 0.4 seconds
-    } else if (buttons_get_down_state() == 0 && --ui8_walk_assist_timeout == 0) {
+      ui32_walk_assist_release_start_ms = get_time_base_counter_1ms();
+    } else if (buttons_get_down_state() == 0
+        && (get_time_base_counter_1ms() - ui32_walk_assist_release_start_ms) >= WALK_ASSIST_RELEASE_TIMEOUT_MS) {
       ui_vars.ui8_walk_assist = 0;
     }
   } else {
@@ -1775,15 +1809,11 @@ static bool appwide_onpress(buttons_events_t events)
 /// Called every 20ms to check for button events and dispatch to our handlers
 static void handle_buttons() {
 
-  static uint8_t firstTime = 1;
-
-  // keep tracking of first time release of onoff button
-  if(firstTime && buttons_get_onoff_state() == 0) {
-    firstTime = 0;
-    buttons_clear_onoff_click_event();
-    buttons_clear_onoff_long_click_event();
-    buttons_clear_onoff_click_long_click_event();
-  }
+  // Boot-time onoff-click suppression now lives in main.c (a single
+  // buttons_clear_all_events() call right after pins_init(), before the
+  // main loop starts) - it's a stronger fix than a first-release latch
+  // here could be (see its own comment for why), so there's nothing left
+  // for this function to guard against at boot.
 
   if (ui8_m_alternate_field_state == 7) { // if virtual throttle mode
     if (buttons_get_up_state() == 0 && // UP and DOWN buttons not pressed
@@ -1799,7 +1829,7 @@ static void handle_buttons() {
     }
   }
 
-  if (buttons_events && firstTime == 0)
+  if (buttons_events)
   {
     bool handled = false;
 
@@ -1861,6 +1891,21 @@ void DisplayResetToDefaults(void) {
 		ui8_g_configuration_display_reset_to_defaults = 0;
 		ui_vars.ui8_confirm_default_reset = 0;
 		eeprom_init_defaults();
+		// 2026-08-28: eeprom_init_defaults() only resets the EEPROM-backed
+		// ui_vars fields (ui32_wh_x10_trip_a_offset, ui32_wh_x10_offset, etc.
+		// all default to 0 - see eeprom.h's DEFAULT_VALUE_WH_X10_* macros). It
+		// never touches these RAM-only running counters. If TripMemoriesReset()
+		// had snapshotted ui32_wh_x10_reset_trip_a to a nonzero
+		// since-power-on Wh value earlier in this same power-on session, this
+		// reset's ui32_wh_x10_trip_a_offset=0 combined with that now-stale
+		// reset_trip_a underflows rt_calc_wh()'s unsigned
+		// "offset + since_reset - reset_trip_a" straight to ~4 billion Wh*10 -
+		// the reported "Wh wraparound" bug. Rebase these alongside the offset
+		// reset, same as TripMemoriesReset()/BatterySOCReset() already do
+		// whenever they touch these offsets.
+		reset_wh();
+		ui32_wh_x10_reset_trip_a = 0;
+		ui32_wh_x10_reset_trip_b = 0;
 		// restore variables
 		ui_vars.ui32_odometer_x10 = rt_vars.ui32_odometer_x10 = ui32_odometer_x10_temp;
 		ui_vars.ui32_wh_x10_total_offset = ui32_wh_x10_total_offset_temp;
@@ -1884,6 +1929,18 @@ void DisplayResetToDefaults(void) {
 		rt_vars.ui8_cruise_feature_enabled = ui_vars.ui8_cruise_feature_enabled;
 		rt_vars.ui8_street_mode_throttle_enabled = ui_vars.ui8_street_mode_throttle_enabled;
 		rt_vars.ui8_street_mode_cruise_enabled = ui_vars.ui8_street_mode_cruise_enabled;
+
+		// 2026-08-28: eeprom_init_defaults() above only resets m_eeprom_data/
+		// ui_vars in RAM - normally that only reaches physical EEPROM later,
+		// inside configExit()'s eeprom_write_variables() call (the only other
+		// call site), which fires when the user backs all the way out of the
+		// Configurations menu tree. If the display gets power-cycled before
+		// that happens, flash still holds the pre-reset values (including
+		// whatever corrupted ui32_wh_x10_trip_a_offset caused the wraparound
+		// in the first place), and the next boot reloads them - undoing this
+		// entire reset. Commit immediately so the reset can't be lost to a
+		// restart, regardless of menu navigation afterward.
+		eeprom_write_variables();
   }
   else if((!ui8_g_configuration_display_reset_to_defaults)
 	&&(ui_vars.ui8_confirm_default_reset)) {
@@ -1926,11 +1983,27 @@ void BatterySOCReset(void) {
 		
 		if(ui_vars.ui16_battery_voltage_soc_x10 < ui_vars.ui16_battery_voltage_reset_wh_counter_x10) {
 			reset_wh();
-			
-			ui8_battery_soc_index = (uint8_t) ((uint16_t) (100
-			- ((ui_vars.ui16_battery_voltage_soc_x10 - ui_vars.ui16_battery_low_voltage_cut_off_x10) * 100)
-			/ (ui_vars.ui16_battery_voltage_reset_wh_counter_x10 - ui_vars.ui16_battery_low_voltage_cut_off_x10)));
-			
+
+			// 2026-08-28: same unsigned-underflow/out-of-bounds-index fix as
+			// state.c's rt_calc_battery_soc() - see that function's comment.
+			// This copy matters just as much: its result directly becomes
+			// ui_vars.ui32_wh_x10_offset a few lines below, i.e. a garbage
+			// index here writes a garbage "Used Wh" value straight to EEPROM.
+			{
+				int32_t ui32_soc_num = (int32_t) ui_vars.ui16_battery_voltage_soc_x10
+					- (int32_t) ui_vars.ui16_battery_low_voltage_cut_off_x10;
+				int32_t ui32_soc_den = (int32_t) ui_vars.ui16_battery_voltage_reset_wh_counter_x10
+					- (int32_t) ui_vars.ui16_battery_low_voltage_cut_off_x10;
+				int32_t ui32_soc_index = (ui32_soc_den > 0)
+					? (100 - (ui32_soc_num * 100) / ui32_soc_den)
+					: 99;
+				if (ui32_soc_index < 0)
+					ui32_soc_index = 0;
+				else if (ui32_soc_index > 99)
+					ui32_soc_index = 99;
+				ui8_battery_soc_index = (uint8_t) ui32_soc_index;
+			}
+
 			ui_vars.ui32_wh_x10_offset = (ui_vars.ui32_wh_x10_100_percent
 				* ui8_battery_soc_used[ui8_battery_soc_index]) / 100;
 			
@@ -2249,6 +2322,56 @@ static uint8_t ui8_lights_off_delay_counter = 0;
 		
 		set_lcd_backlight();
 	}
+}
+
+// Continuous photocell-driven backlight - independent of auto_on_off_lights()
+// above (that one only flips the two fixed "Brightness (lights on/off)"
+// presets on a dusk-detection threshold). When enabled, this overrides the
+// backlight with a live linear map of the raw sensor reading between "Auto
+// bright min"/"max", so it responds to daytime cloud cover etc. too, not
+// just night vs. day. When disabled, set_lcd_backlight()'s two-preset
+// behavior is untouched - this function just doesn't run.
+void auto_adjust_brightness(void) {
+#define ADC_AUTO_BRIGHTNESS_LIGHT_DIV100	11 // adc value 1150 - same calibration as auto_on_off_lights()
+#define ADC_AUTO_BRIGHTNESS_DARK_DIV100	41 // adc value 4090
+
+	if (!ui_vars.ui8_auto_brightness_enabled) {
+		return;
+	}
+
+	uint16_t ui16_adc_value = adc_light_sensor_get();
+	uint16_t ui16_adc_light = ADC_AUTO_BRIGHTNESS_LIGHT_DIV100 * 100;
+	uint16_t ui16_adc_dark = ADC_AUTO_BRIGHTNESS_DARK_DIV100 * 100;
+	uint8_t ui8_brightness;
+
+	// Low ADC reading = bright ambient light (use max brightness), high ADC
+	// reading = dark (use min brightness) - inverse relationship, same
+	// sensor/circuit as auto_on_off_lights() above.
+	if (ui16_adc_value <= ui16_adc_light) {
+		ui8_brightness = ui_vars.ui8_auto_brightness_max;
+	}
+	else if (ui16_adc_value >= ui16_adc_dark) {
+		ui8_brightness = ui_vars.ui8_auto_brightness_min;
+	}
+	else {
+		// "Auto brightness minimum"/"maximum" are independently editable
+		// (configscreen.c, no cross-field validation) - if a user sets min >
+		// max, this subtraction would underflow the uint8_t and produce a
+		// garbage brightness. Clamp the range to 0 instead, which just holds
+		// brightness at the max setting through the whole dim-transition
+		// zone - a safe, simple fallback for a self-inflicted misconfig
+		// rather than a wrapped/undefined value.
+		uint8_t ui8_brightness_range = (ui_vars.ui8_auto_brightness_max > ui_vars.ui8_auto_brightness_min) ?
+			(ui_vars.ui8_auto_brightness_max - ui_vars.ui8_auto_brightness_min) : 0;
+		uint16_t ui16_adc_range = ui16_adc_dark - ui16_adc_light;
+		uint16_t ui16_adc_offset = ui16_adc_value - ui16_adc_light;
+
+		ui8_brightness = ui_vars.ui8_auto_brightness_max -
+			(uint8_t)(((uint32_t) ui8_brightness_range * ui16_adc_offset) / ui16_adc_range);
+	}
+
+	lcd_set_backlight_intensity(ui8_brightness);
+	ui_vars.ui8_current_brightness_percent = ui8_brightness;
 }
 #endif
 

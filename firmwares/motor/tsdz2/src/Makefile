@@ -4,7 +4,7 @@
 #Copyright 2016
 #LICENSE:	GNU-LGPL
 
-.PHONY: all clean mkdir build
+.PHONY: all clean mkdir build config heartbeat
 
 #Compiler
 CC = sdcc
@@ -122,6 +122,26 @@ clean:
 
 mkdir:
 	mkdir -p $(ODIR)
+
+# Show which display/UART protocol a NATIVE `make` would build. Important
+# distinction: native `make` compiles the checked-in config.h (this file's
+# own defaults, currently ENABLE_VLCD5=1 / ENABLE_860C_LVGL_UART=0), NOT the
+# web configurator's generated config.h. So a native build is always the
+# VLCD5/DZ40 variant unless config.h is hand-edited; the 860C variant is only
+# ever produced by the web configurator's in-browser build. Cross-check this
+# against the web configurator's own build log (which now echoes the same
+# flags).
+config:
+	@echo "=== Active display/UART flags in config.h (native make) ==="
+	@grep -E '^#define (ENABLE_860C_LVGL_UART|ENABLE_850C|ENABLE_VLCD6|ENABLE_VLCD5|ENABLE_XH18|ENABLE_EKD01)' config.h
+
+# One-off diagnostic build: toggles PD5 (the UART2 TX line) at ~1 Hz forever
+# at the very top of main(), to prove the firmware reaches main() at all (see
+# the BOOT_HEARTBEAT block in main.c). Build with the config.h set to whatever
+# display variant you're debugging (flip ENABLE_860C_LVGL_UART / ENABLE_VLCD5
+# by hand first), then `make clean && make heartbeat` and flash main.hex.
+heartbeat: CFLAGS += -DBOOT_HEARTBEAT
+heartbeat: all
 
 ## uncomment to print make variables
 # debug_make:

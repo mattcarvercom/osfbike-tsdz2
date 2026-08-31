@@ -78,6 +78,22 @@ function renderBuildPanel(app: HTMLElement): HTMLElement {
         renderApp(app);
         try {
           const configH = generateConfigH(state.values);
+          // Echo the display/UART protocol flags actually baked into this
+          // build, so a wrong/stale selection can't silently produce a VLCD5
+          // build - visible in the log right below this line, before the
+          // per-file compile progress.
+          appendLog("Display type in this build (from generated config.h):");
+          for (const flag of [
+            "ENABLE_860C_LVGL_UART",
+            "ENABLE_850C",
+            "ENABLE_VLCD6",
+            "ENABLE_VLCD5",
+            "ENABLE_XH18",
+            "ENABLE_EKD01",
+          ]) {
+            const m = new RegExp(`^#define ${flag}\\s+(\\d+)`, "m").exec(configH);
+            if (m) appendLog(`  ${flag} = ${m[1]}`);
+          }
           const hex = await buildFirmwareHex(configH, appendLog);
           state.firmwareHexText = hex;
           state.firmwareHexName = `${state.currentFileBaseName}.hex`;

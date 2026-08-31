@@ -13,8 +13,9 @@ The LVGL rewrite itself (`common/src/theme_osf_modern.c` + the
 `dashboard_theme.h`/`.c` theme registry) is complete as of 2026-08-19 — all
 5 screens (main, graph, config, boot, fault) are real, not placeholders.
 See `../../../tools/CLAUDE.md`'s "OSF Modern LVGL dashboard theme" section
-for the full architecture writeup and status. Not yet verified against
-real hardware.
+for the full architecture writeup and status. Flashed and ridden on a real
+860C as of 2026-08-27; 850C/850C (2021) share this same source but haven't
+had their own hardware pass yet.
 
 Only `common/` and `860C_850C/` were vendored here — `SW102/` (nRF51822/BLE, a
 completely different UI/hardware class) has its own independent copy at

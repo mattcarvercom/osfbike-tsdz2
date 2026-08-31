@@ -40,7 +40,29 @@
 
 
 // system
-#define DEFAULT_VALUE_KEY     204
+// EEPROM_init() (eeprom.c) only ever compares the stored key byte against
+// this value - a match is trusted as "already initialized, read it as-is",
+// a mismatch reseeds everything from ui8_default_array/config.h, same as a
+// genuinely blank chip. 204 alone is the original casainho/Leon stock key,
+// which this fork inherited but never bumped itself - meaning ANY two builds
+// that both ever wrote a real key (DZ40 protocol, 860C protocol, before/after
+// an EEPROM-backed field's meaning changed) look identically "valid" to each
+// other, even when what they stored means something different. Real-hardware
+// bring-up 2026-08-24 hit exactly this: 860C-protocol EEPROM state silently
+// surviving into a DZ40 boot, with no crash or error - just wrong behavior.
+//
+// EEPROM_LAYOUT_VERSION is this fork's own guard on top of that: bump it by
+// hand whenever a change could alter what the stored bytes mean (reordering/
+// reinterpreting ui8_default_array, or changing how a compile-time flag like
+// ENABLE_860C_LVGL_UART affects an EEPROM-backed field's meaning) - NOT on
+// every ordinary settings change (wheel size, current limits, etc. - those
+// are supposed to persist across reflashes). Deliberately manual rather than
+// auto-derived from config.h, to avoid wiping calibration data on benign
+// changes - see UNIVERSAL_FIRMWARE_PLAN.md and this fork's stance against
+// EEPROM migration complexity (no installed base to migrate; wipe-clean on
+// any real mismatch is the whole policy).
+#define EEPROM_LAYOUT_VERSION  1
+#define DEFAULT_VALUE_KEY      (204 + EEPROM_LAYOUT_VERSION)
 #define SET_TO_DEFAULT        0
 #define READ_FROM_MEMORY      1
 #define WRITE_TO_MEMORY       2

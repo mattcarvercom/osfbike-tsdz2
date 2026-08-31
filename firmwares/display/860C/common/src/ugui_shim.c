@@ -28,6 +28,7 @@
 #include "screen.h"
 #include "fonts.h"
 #include "ugui.h"
+#include "state.h"
 
 /* ---- Font objects (fonts.c provided these; dummy instances suffice ----
  * The domain layer only ever passes these to UG_FontSelect() (a no-op
@@ -103,7 +104,20 @@ Screen *g_lvgl_requested_screen = NULL;
 bool (*g_lvgl_screen_on_press)(buttons_events_t events) = NULL;
 static Screen *g_current_screen = NULL;
 
-void screen_init(void) {}
+/* Not a pure no-op: the real screen.c screen_init() (excluded from this
+ * build) sets ui8_g_screen_init_flag = 1, which state.c's
+ * copy_rt_to_ui_vars() checks directly (its "Bike menu initialization"/
+ * "Bike menu edit" gating, ~state.c:1046-1138) to force the first-ever
+ * EEPROM-loaded config values (wheel_perimeter, street-mode limits, etc.)
+ * to propagate from ui_vars into rt_vars unconditionally on boot, rather
+ * than relying on the password-disabled fallback condition alone. Left as
+ * an empty stub here originally along with the real UG_ and screen.c
+ * drawing no-ops above, but this one has a real non-drawing side effect stock
+ * firmware depends on - found 2026-08-23 investigating why the odometer/
+ * trip distance never advance on a bench-flashed display. */
+void screen_init(void) {
+  ui8_g_screen_init_flag = 1;
+}
 void screenShow(Screen *screen) {
   g_current_screen = screen;
   g_lvgl_requested_screen = screen;

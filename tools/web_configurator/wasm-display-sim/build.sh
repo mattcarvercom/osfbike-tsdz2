@@ -62,6 +62,7 @@ emcc \
 	-DDISPLAY_FIRMWARE_MAJOR=\"1\" \
 	-DDISPLAY_FIRMWARE_MINOR=\"0\" \
 	-DDISPLAY_FIRMWARE_PATCH=\"0\" \
+	-DDISPLAY_BUILD_DATE=\"sim-$(date +%Y%m%d.%H%M)\" \
 	`# MAJOR/MINOR/PATCH mirror the submodule's own firmware/common/Makefile.common - keep in sync if that ever changes` \
 	"$COMMON/src/buttons.c" \
 	"$COMMON/src/utils.c" \

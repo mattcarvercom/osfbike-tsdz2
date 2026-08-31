@@ -17,6 +17,11 @@ static Field tripMenus[] =
 #else
 	FIELD_EDITABLE_ENUM("Rst trip A", &ui8_g_configuration_trip_a_reset, "no", "yes"),
 	FIELD_EDITABLE_ENUM("Rst trip B", &ui8_g_configuration_trip_b_reset, "no", "yes"),
+	/* Off by default: trip time counts continuously from trip start to
+	 * reset (elapsed on-bike time). Enable to pause the timer instead
+	 * whenever the wheel isn't turning (moving-time only). Shared by both
+	 * trip A and trip B. */
+	FIELD_EDITABLE_ENUM("Auto pause", &ui_vars.ui8_trip_auto_pause_enabled, "no", "yes"),
 #endif
 	FIELD_END };
 

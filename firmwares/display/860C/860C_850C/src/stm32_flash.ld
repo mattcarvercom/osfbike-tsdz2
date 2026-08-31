@@ -126,6 +126,16 @@ SECTIONS
     _edata = .;        /* define a global symbol at data end */
   } >RAM
 
+  /* Flash address of the last byte objcopy -O binary will actually emit -
+   * .data's AT(_sidata) load copy is the last section in this script with
+   * any FLASH-resident content (.bss/.memory_b1_text below are RAM/unused-
+   * bank only), so this is genuinely "one past the end of main.bin" before
+   * any post-link append. utils.c's firmware_integrity_check_ok() uses this
+   * to know exactly how many flashed bytes to CRC and where the build's
+   * appended expected-CRC halfword landed - see crc16-append.py, invoked
+   * from the Makefile right after objcopy. */
+  _flash_image_end = _sidata + (_edata - _sdata);
+
   /* Uninitialized data section */
   . = ALIGN(4);
   .bss :

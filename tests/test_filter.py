@@ -10,9 +10,18 @@ from hypothesis import given, strategies as st
 def test_filter(init_value, end_value, alpha):
 	filter_result = init_value
 
-	# should converage at least twice as fast as the difference
-	# additionally for small delta and large alpha it will converge linearly
-	loops = round((abs(end_value - init_value) + alpha) / 2 + 0.5)
+	# common.c's filter() forces at least 1 unit of progress toward end_value
+	# per call whenever its raw weighted-average step would otherwise round to
+	# the same old value ("if (filtered == old) nudge by 1 toward new") - so
+	# convergence can never take more than the full delta's worth of calls,
+	# regardless of alpha. The old formula here (~half the delta, "twice as
+	# fast") was an unproven guess that undercounted needed loops for some
+	# real inputs - e.g. init_value=17, end_value=0, alpha=15 only converges
+	# on the 17th call, not the ~16 that formula predicted (caught by
+	# hypothesis, reported as a test that "fails all the time" - it wasn't
+	# flaky, just wrong for specific generated cases). +1 here is just a
+	# safety margin, not load-bearing.
+	loops = abs(end_value - init_value) + 1
 	for _ in range(loops):
 		filter_result = ebike.filter(end_value, filter_result, alpha)
 

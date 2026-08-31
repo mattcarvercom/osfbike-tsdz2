@@ -62,6 +62,21 @@ HYBRID_ASSIST_MODE = 5
 CRUISE_MODE = 6
 WALK_ASSIST_MODE = 7
 
+# The 860C's own raw byte[4] PAS numbers (1-5, "Num assist levels" in its
+# Config screen) are NOT the same sequence as the OFF/ECO/TOUR/SPORT/TURBO
+# enum above - config.h's checked-in ASSIST_LEVEL_5_MODE=1 (BEFORE_ECO)
+# means raw 1 is DZ40's own "assist level 5" quirk button (half-power ECO,
+# see uart_receive_package()'s ASSIST_PEDAL_LEVEL5 case), and raw 2-5 shift
+# down one slot into ECO/TOUR/SPORT/TURBO. Confirmed against real DZ40
+# hardware 2026-08-28. Use these where a test means "the raw PAS number the
+# display would actually send", as opposed to OFF/ECO/TOUR/SPORT/TURBO above
+# which are the resulting mode enum.
+RAW_PAS_BEFORE_ECO = 1
+RAW_PAS_ECO = 2
+RAW_PAS_TOUR = 3
+RAW_PAS_SPORT = 4
+RAW_PAS_TURBO = 5
+
 CONFIG_OVERRIDES = {"ENABLE_860C_LVGL_UART": 1}
 
 
@@ -212,7 +227,7 @@ def test_boot_starts_in_reset_and_self_announces_alive(ebike):
     assert ebike.ui8_tx_buffer[2] == COMM_FRAME_TYPE_ALIVE
 
 
-def test_firmware_version_reply_is_0_21_52(ebike):
+def test_firmware_version_reply_is_0_21_53(ebike):
     ebike, ffi, _ = ebike
     _receive(ebike, build_frame(COMM_FRAME_TYPE_FIRMWARE_VERSION, []))
     ebike.communications_controller()
@@ -220,7 +235,7 @@ def test_firmware_version_reply_is_0_21_52(ebike):
     assert ebike.ui8_tx_buffer[2] == COMM_FRAME_TYPE_FIRMWARE_VERSION
     assert ebike.ui8_tx_buffer[4] == 0
     assert ebike.ui8_tx_buffer[5] == 21
-    assert ebike.ui8_tx_buffer[6] == 52
+    assert ebike.ui8_tx_buffer[6] == 53
     # a valid packet moves the motor out of RESET
     assert ebike.ui8_m_motor_init_state == MOTOR_INIT_STATE_NO_INIT
 
@@ -238,12 +253,24 @@ def test_status_reply_reports_init_status(ebike):
 # ---------------------------------------------------------------------------
 
 
-def test_configurations_apply_confirmed_fields_and_advance_state(ebike):
+def test_configurations_frame_does_not_override_firmware_values(ebike):
     ebike, ffi, tim1 = ebike
+
+    # the motor's own EEPROM/config.h-sourced values, as set by ebike_app_init()
+    # before this frame ever arrives - the display must not be able to clobber
+    # these (2026-08-28: confirmed on real hardware the 860C's own EEPROM
+    # defaults - e.g. 2100mm wheel perimeter, 16A battery current - were
+    # silently overwriting a correctly-configured motor firmware, breaking
+    # speed calc and capping power well below the configured limit).
+    battery_low_voltage_cut_off_x10_before = ebike.m_configuration_variables.ui16_battery_low_voltage_cut_off_x10
+    wheel_perimeter_before = ebike.m_configuration_variables.ui16_wheel_perimeter
+    battery_current_max_before = ebike.m_configuration_variables.ui8_battery_current_max
 
     # battery low-voltage cutoff = 420 (42.0V x10), little-endian at [3][4]
     # wheel perimeter = 2070 at [5][6]
     # battery max current = 18 at [7]
+    # (all deliberately different from the firmware's own values above, to
+    # prove the frame can't override them)
     frame = build_config_frame({
         3: 420 & 0xFF, 4: (420 >> 8) & 0xFF,
         5: 2070 & 0xFF, 6: (2070 >> 8) & 0xFF,
@@ -254,10 +281,11 @@ def test_configurations_apply_confirmed_fields_and_advance_state(ebike):
     _receive(ebike, frame)
     ebike.communications_controller()
 
-    assert ebike.m_configuration_variables.ui16_battery_low_voltage_cut_off_x10 == 420
-    assert ebike.m_configuration_variables.ui16_wheel_perimeter == 2070
-    assert ebike.m_configuration_variables.ui8_battery_current_max == 18
-    # motor-init state machine advances to the delay phase
+    assert ebike.m_configuration_variables.ui16_battery_low_voltage_cut_off_x10 == battery_low_voltage_cut_off_x10_before
+    assert ebike.m_configuration_variables.ui16_wheel_perimeter == wheel_perimeter_before
+    assert ebike.m_configuration_variables.ui8_battery_current_max == battery_current_max_before
+    # motor-init state machine still advances to the delay phase - the display
+    # needs this handshake regardless of whether its config values are applied
     assert ebike.ui8_m_motor_init_state == MOTOR_INIT_STATE_INIT_START_DELAY
     assert ebike.ui8_m_motor_init_status == MOTOR_INIT_STATUS_GOT_CONFIG
     # PWM disabled during the write
@@ -324,32 +352,48 @@ def _send_periodic(ebike, payload_9):
 def test_periodic_applies_assist_walk_and_wheel_max_speed(ebike):
     ebike, ffi, _ = ebike
 
-    # [3]=riding mode parameter, [7]=walk assist parameter, [9]=wheel max speed
-    # [5]=0x04 -> assist level flag set (bit2), [8]=riding mode POWER_ASSIST
-    _send_periodic(ebike, [64, 0, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+    # byte[3] used to be relayed straight into ui8_riding_mode_parameter (the
+    # display's own separately-configured factor) - it's unused now (2026-08-28
+    # fix, see ebike_app.c's "set assist parameter" comment): the applied factor
+    # comes from config.h's own ui8_riding_mode_parameter_array instead, same as
+    # the DZ40/VLCD5 protocol. [4]=raw assist level, [7]=walk assist parameter,
+    # [9]=wheel max speed; [5]=0x00 -> assist level flag clear (bit2), so the
+    # display is reporting "off" regardless of whatever raw number sits in
+    # byte[4] (mirrors state.c's own rt_send_tx_package(), which always zeroes
+    # byte[4] itself when ui8_assist_level==0); [8]=riding mode POWER_ASSIST
+    _send_periodic(ebike, [64, 0, 0x00, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
 
-    assert ebike.ui8_riding_mode_parameter == 64
+    # POWER_ASSIST_LEVEL_OFF (config.h default) - level 0 (OFF) in POWER_ASSIST_MODE
+    assert ebike.ui8_riding_mode_parameter == 0
     assert ebike.ui8_walk_assist_parameter == 25
     assert ebike.ui8_wheel_speed_max == 59
     assert ebike.m_configuration_variables.ui8_riding_mode == POWER_ASSIST_MODE
-    assert ebike.ui8_assist_level_flag == 1
+    assert ebike.ui8_assist_level_flag == 0
 
 
 def test_periodic_relays_real_assist_level_in_non_hybrid_mode(ebike):
-    """Regression test: byte[4] carries the display's real 1-4 assist level
-    whenever the base riding mode isn't hybrid (state.c:257-259) - it must not
-    be collapsed to a flag-derived ECO/OFF, or apply_cruise()'s per-level speed
-    table always resolves to the ECO row regardless of the level selected on
-    the display."""
+    """Regression test: byte[4] carries the display's raw 1-5 PAS number
+    whenever the base riding mode isn't hybrid (state.c:257-259) - it must
+    resolve to the same assist MODE the equivalent DZ40 PAS number would
+    (see RAW_PAS_* above for the real, hardware-confirmed mapping under this
+    config.h's ASSIST_LEVEL_5_MODE=1/BEFORE_ECO), not a raw pass-through, or
+    apply_cruise()'s per-level speed table resolves to the wrong row/level
+    entirely."""
     ebike, ffi, _ = ebike
 
-    # byte[4]=SPORT, byte[5]=0x04 (assist flag set), byte[8]=POWER_ASSIST_MODE
-    _send_periodic(ebike, [64, SPORT, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+    # byte[4]=raw SPORT, byte[5]=0x04 (assist flag set), byte[8]=POWER_ASSIST_MODE
+    _send_periodic(ebike, [64, RAW_PAS_SPORT, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
     assert ebike.ui8_assist_level == SPORT
 
+    # byte[4]=raw BEFORE_ECO (the odd one out - lowest raw number, not lowest mode)
+    _send_periodic(ebike, [64, RAW_PAS_BEFORE_ECO, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+    assert ebike.ui8_assist_level == ECO
+    assert ebike.ui8_assist_level_5_flag == 1
+
     # assist flag clear -> OFF regardless of byte[4]
-    _send_periodic(ebike, [64, TURBO, 0x00, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+    _send_periodic(ebike, [64, RAW_PAS_TURBO, 0x00, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
     assert ebike.ui8_assist_level == OFF
+    assert ebike.ui8_assist_level_5_flag == 0
 
     # out-of-range byte[4] clamps to TURBO rather than wrapping/overflowing
     _send_periodic(ebike, [64, 9, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
@@ -388,15 +432,29 @@ def test_periodic_telemetry_is_live_not_stubbed(ebike):
 
 
 def test_two_periodic_frames_change_applied_state(ebike):
+    """ui8_riding_mode_parameter now tracks the real assist level (byte[4])
+    via config.h's own table, not a raw relayed byte[3] - vary the level
+    between frames instead to prove state genuinely updates call-to-call.
+    Uses RAW_PAS_ECO/RAW_PAS_SPORT (not the ECO/SPORT mode enum values
+    directly) since raw byte[4] and the mode enum aren't the same numbering
+    - see RAW_PAS_* above.
+
+    payload byte[6] (ui8_rx_buffer[9], wheel max speed) is deliberately
+    varied between 59 and 30 here but ui8_wheel_speed_max must stay pinned to the motor's own
+    WHEEL_MAX_SPEED/STREET_MODE_SPEED_LIMIT config.h array regardless -
+    real-hardware bring-up 2026-08-29: this byte used to be relayed
+    straight through with no clamp, silently overridden by whatever this
+    display's own EEPROM (default 25 km/h) happened to hold, capping real
+    assist to ~15mph independent of config.h's real, much higher limit."""
     ebike, ffi, _ = ebike
 
-    _send_periodic(ebike, [64, 0, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
-    assert ebike.ui8_riding_mode_parameter == 64
-    assert ebike.ui8_wheel_speed_max == 59
+    _send_periodic(ebike, [0, RAW_PAS_ECO, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+    assert ebike.ui8_riding_mode_parameter == 80  # POWER_ASSIST_LEVEL_ECO (config.h default)
+    assert ebike.ui8_wheel_speed_max == 59  # WHEEL_MAX_SPEED (config.h default)
 
-    _send_periodic(ebike, [120, 0, 0x04, 0, 40, POWER_ASSIST_MODE, 30, 0, 0])
-    assert ebike.ui8_riding_mode_parameter == 120
-    assert ebike.ui8_wheel_speed_max == 30
+    _send_periodic(ebike, [0, RAW_PAS_SPORT, 0x04, 0, 40, POWER_ASSIST_MODE, 30, 0, 0])
+    assert ebike.ui8_riding_mode_parameter == 160  # POWER_ASSIST_LEVEL_SPORT (config.h default)
+    assert ebike.ui8_wheel_speed_max == 59  # unchanged - byte[6] is ignored, not relayed
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +478,128 @@ def test_corrupted_frame_is_rejected_without_dispatch(ebike):
     ebike.communications_controller()
     assert ebike.ui8_received_package_flag == 0
     assert ebike.ui8_m_motor_init_state == state
+
+
+# ---------------------------------------------------------------------------
+# Walk-assist cruise-control override (real-hardware bring-up 2026-08-26)
+# ---------------------------------------------------------------------------
+
+CONFIG_OVERRIDES_CRUISE = {
+    "ENABLE_860C_LVGL_UART": 1,
+    "CRUISE_MODE_ENABLED": 1,
+    "CRUISE_OVERRIDE_WALK_TURBO_ENABLED": 1,
+    "CRUISE_MODE_WALK_ENABLED": 1,  # cruiseWithoutPedaling - override from a dead stop
+    "CRUISE_THRESHOLD_SPEED": 0,
+}
+
+
+@pytest.fixture(scope="module")
+def ebike_cruise():
+    scratch = tempfile.mkdtemp(prefix="tsdz2-860c-cruise-test-")
+    try:
+        for name in os.listdir(SRC_DIR):
+            path = os.path.join(SRC_DIR, name)
+            if os.path.isfile(path) and name.endswith((".c", ".h")):
+                shutil.copy(path, scratch)
+
+        config_path = os.path.join(scratch, "config.h")
+        with open(config_path, encoding="utf8") as fh:
+            text = fh.read()
+        for key, value in CONFIG_OVERRIDES_CRUISE.items():
+            pattern = rf"^#define {key} .*$"
+            text, count = re.subn(pattern, f"#define {key} {value}", text, flags=re.M)
+            assert count == 1, f"expected exactly one '#define {key} ...' in config.h, found {count}"
+        with open(config_path, "w", encoding="utf8") as fh:
+            fh.write(text)
+
+        orig_source_dirs = load_c_code.source_dirs
+        orig_include_dirs = load_c_code.include_dirs
+        load_c_code.source_dirs = [scratch + os.sep]
+        load_c_code.include_dirs = [scratch + os.sep, STDPERPH_INC + os.sep]
+        try:
+            lib, ffi = load_c_code.load_code("_tsdz2_860c_cruise", force_recompile=True)
+        finally:
+            load_c_code.source_dirs = orig_source_dirs
+            load_c_code.include_dirs = orig_include_dirs
+
+        @ffi.def_extern()
+        def UART2_ITConfig(*args):
+            pass
+
+        @ffi.def_extern()
+        def TIM1_OC1Init(*args):
+            pass
+
+        @ffi.def_extern()
+        def TIM1_OC2Init(*args):
+            pass
+
+        @ffi.def_extern()
+        def TIM1_OC3Init(*args):
+            pass
+
+        yield lib, ffi
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def test_periodic_engages_cruise_override_at_turbo(ebike_cruise):
+    """Regression: the walk-assist cruise-control override (holding the
+    walk-assist button at a configured level borrows apply_cruise()'s real
+    PID - see main.h's CRUISE_OVERRIDE_ACTIVE_LEVEL) was only ever wired into
+    the DZ40/VLCD5 protocol's uart_receive_package() - the 860C's own
+    communications_process_packages() PERIODIC handler never engaged it at
+    all. Real-hardware bring-up 2026-08-26: reported as "walk assist cruise
+    control override doesn't seem to work only on the 860C, even in PAS 5
+    (TURBO)"."""
+    ebike, ffi = ebike_cruise
+    ebike.ui8_startup_flag = 1
+
+    # prime ui8_assist_level_before_walk_button at TURBO first (button not yet
+    # held) - models a real display, which sends periodic frames continuously
+    # before any button press. byte[4]=raw PAS number (RAW_PAS_TURBO, not the
+    # TURBO mode enum - see RAW_PAS_* above), byte[5]=0x04 = assist level flag only.
+    _send_periodic(ebike, [64, RAW_PAS_TURBO, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+
+    # byte[4]=raw TURBO, byte[5]=0x06 (assist level flag bit2 + walk assist bit1)
+    _send_periodic(ebike, [64, RAW_PAS_TURBO, 0x06, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+
+    assert ebike.m_configuration_variables.ui8_riding_mode == CRUISE_MODE, (
+        "walk-assist button held at TURBO did not engage CRUISE_MODE via the override - "
+        f"got riding_mode={ebike.m_configuration_variables.ui8_riding_mode}"
+    )
+    assert ebike.ui8_cruise_override_flag == 1
+    assert ebike.ui8_walk_assist_flag == 0
+
+    # release the button (walk assist bit clear) - restores the prior riding mode
+    _send_periodic(ebike, [64, RAW_PAS_TURBO, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+    assert ebike.m_configuration_variables.ui8_riding_mode == POWER_ASSIST_MODE
+    assert ebike.ui8_cruise_override_flag == 0
+
+
+def test_periodic_plain_walk_assist_still_works_at_non_override_level(ebike_cruise):
+    """Only TURBO has the override enabled in this fixture - ECO must still
+    fall through to plain WALK_ASSIST_MODE (and set ui8_walk_assist_flag, so
+    apply_smooth_start()'s bypass still applies on 860C too)."""
+    ebike, ffi = ebike_cruise
+    ebike.ui8_startup_flag = 1
+    ebike.ui16_wheel_speed_x10 = 0
+
+    # prime ui8_assist_level_before_walk_button at ECO first (button not yet
+    # held) - this module-scoped fixture may carry state from earlier tests
+    # (e.g. still snapshotted at TURBO), and TURBO does have the override
+    # enabled in this fixture, so skipping this priming packet would leak a
+    # stale TURBO snapshot into this ECO scenario. byte[4]=raw PAS number
+    # (RAW_PAS_ECO, not the ECO mode enum - see RAW_PAS_* above), byte[5]=0x04
+    # = assist level flag only.
+    _send_periodic(ebike, [30, RAW_PAS_ECO, 0x04, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+
+    # byte[4]=raw ECO, byte[5]=0x06 (assist level flag + walk assist)
+    _send_periodic(ebike, [30, RAW_PAS_ECO, 0x06, 0, 25, POWER_ASSIST_MODE, 59, 0, 0])
+
+    assert ebike.m_configuration_variables.ui8_riding_mode == WALK_ASSIST_MODE
+    assert ebike.ui8_cruise_override_flag == 0
+    assert ebike.ui8_walk_assist_flag == 1
 
 
 if __name__ == "__main__":

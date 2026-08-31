@@ -404,6 +404,12 @@ typedef struct ui_vars_struct {
 	uint32_t ui32_trip_a_time;
 	uint16_t ui16_trip_a_avg_speed_x10;
 	uint16_t ui16_trip_a_max_speed_x10;
+	/* Trip memories -> "Auto pause" - see state.c's rt_calc_trips() 1s
+	 * timer tick for where this is acted on. Default off: trip time counts
+	 * continuously once the trip starts (elapsed on-bike time), matching
+	 * "a trip is when you get on the bike and when you get off" rather
+	 * than moving-time-only. Shared by both trip A and trip B timers. */
+	uint8_t ui8_trip_auto_pause_enabled;
 
 #ifndef SW102
 	uint8_t  ui8_trip_b_auto_reset;

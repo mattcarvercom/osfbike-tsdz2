@@ -13,3 +13,6 @@
 [submodule "firmwares/display/860C/lvgl"]
 	path = firmwares/display/860C/lvgl
 	url = https://github.com/lvgl/lvgl.git
+[submodule "tools/web_configurator/vendor/webserial-esptool"]
+	path = tools/web_configurator/vendor/webserial-esptool
+	url = https://github.com/Jason2866/WebSerial_ESPTool.git

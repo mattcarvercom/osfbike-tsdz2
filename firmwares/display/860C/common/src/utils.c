@@ -82,6 +82,38 @@ void crc16(uint8_t ui8_data, uint16_t *ui16_crc) {
 	}
 }
 
+#ifdef STM32F10X_MD
+// FLASH's real origin per stm32_flash.ld's MEMORY block - hand-kept in sync
+// with that file's own hand-evaluated comment (20K bootloader region, same
+// value the UART flasher's ADDRESS_FIELD_BASE + its own +0x1000 remap
+// arrives at). Not available as a linker symbol directly (ORIGIN() isn't
+// exported), so it's a literal here rather than an extern.
+#define FLASH_APP_ORIGIN ((const uint8_t *) (0x08000000 + 20 * 1024))
+
+// One past the last byte objcopy -O binary actually emitted for this image,
+// before crc16-append.py's 2-byte tail - see stm32_flash.ld's own comment
+// on this symbol for why it's exactly that boundary. Only its address
+// matters here, never its (undefined) value, hence the byte-typed extern.
+extern const uint8_t _flash_image_end;
+
+bool firmware_integrity_check_ok(void) {
+	const uint8_t *p_app_end = &_flash_image_end;
+	uint32_t ui32_app_size = (uint32_t)(p_app_end - FLASH_APP_ORIGIN);
+	uint16_t ui16_crc = 0xffff;
+
+	for (uint32_t ui32_i = 0; ui32_i < ui32_app_size; ui32_i++) {
+		crc16(FLASH_APP_ORIGIN[ui32_i], &ui16_crc);
+	}
+
+	// crc16-append.py writes the expected value as two little-endian bytes
+	// immediately after the image it CRC'd - same layout a plain
+	// `*(uint16_t *)` read produces on this little-endian Cortex-M3 target.
+	uint16_t ui16_expected_crc = (uint16_t) p_app_end[0] | ((uint16_t) p_app_end[1] << 8);
+
+	return ui16_crc == ui16_expected_crc;
+}
+#endif
+
 //// reverses a string 'str' of length 'len'
 //void reverse(char *str, int len)
 //{
