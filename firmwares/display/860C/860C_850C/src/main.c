@@ -28,6 +28,7 @@
 #include "stm32f10x_usart.h"
 #include "mainscreen.h"
 #include "configscreen.h"
+#include "state.h"
 #include "ugui_driver/ugui_display_8x0c.h"
 #include "lv_port_indev.h"
 #include "lvgl.h"
@@ -50,11 +51,45 @@ int main(void)
 #endif
 
   pins_init();
+
+  /* Boot-time ghost-click guard: the physical power button is very likely
+   * still held down right now (it's what powered the display on), but
+   * buttons_clock()'s onoff state machine has no way to tell "still
+   * finishing the power-on hold" apart from "user just pressed it". If it
+   * started timing from this stale press, a normal-length release shortly
+   * after boot gets replayed as a genuine click ~TIME_2 (buttons.c) later -
+   * landing on whatever appwide_onpress() maps a click to at that moment
+   * (next screen, or the assist-mode-edit toggle when PAS is 0 - both seen
+   * on real hardware, 2026-08-26). buttons_clear_all_events() makes
+   * buttons_clock() itself no-op every tick until it observes *every*
+   * button fully released (its own "exit if any button is pressed after
+   * clear event" guard), so the state machine only ever starts counting
+   * from a fresh, unambiguous press - not a leftover one-shot latch like
+   * the old mainscreen.c handle_buttons() guard this replaces, which could
+   * only clear an event that had already fired, not one still ~200ms out. */
+  buttons_clear_all_events();
+
   adc_init();
   system_power(1);
   systick_init();
   usart1_init();
   eeprom_init();
+
+  /* Trip memories -> "Auto reset trip on power-on" (configscreen.c's
+   * tripMenus[], default off) - ui_vars/rt_vars are fully loaded from
+   * EEPROM as of eeprom_init() above, so this is the earliest point trip
+   * A/odometer values actually exist to reset. Arms TripMemoriesReset()'s
+   * existing one-shot triggers (mainscreen.c, already called every main
+   * loop iteration) rather than duplicating its reset logic here - the
+   * odometer has no equivalent trigger, so it's zeroed directly. */
+  if (ui_vars.ui8_auto_reset_trip_on_poweron) {
+    ui8_g_configuration_trip_a_reset = 1;
+#ifdef SW102
+    ui8_g_configuration_trip_b_reset = 1;
+#endif
+    rt_vars.ui32_odometer_x10 = 0;
+  }
+
   rtc_init();
   timer3_init(); // drives LCD backlight
   lcd_init();

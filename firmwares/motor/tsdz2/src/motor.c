@@ -875,34 +875,19 @@ INTERRUPT_HANDLER(TIM1_CAP_COM_IRQHandler, TIM1_CAP_COM_IRQHANDLER) {
 
 
         /* ----------------------------------------------------------------------------
-        *  Overrun detection is used to protect one-way clutch in the blue gear protection against slipping often caused by stresses on * 
-        *  Variable slip threshold: N × (MOTOR_TASK_FREQ / (limit_erps × MOTOR_HALL_STATES)) > sensor_ticks
-        *  N = pas_hall_delta - MOTOR_HALL_TICKS_EVERY_CADENCE_TICK (motor_slippage hall ticks)
-        *  limit_erps = 40 ERPS - gives some margin (25erps is minimum to detect slip with one tick over at 650 ERPS motor max)
-        *  coeff = 19047/(40*6) ≈ 79
+        *  Overrun (one-way clutch slip) detection - dzid26/TSDZ2-Smart-EBike merge
+        *  addition, 2026-08-18 - removed entirely 2026-08-25. Was: fixed slip-threshold
+        *  constants, a static overrun flag latched by comparing hall ticks since the
+        *  last PAS state change against a calibrated slip limit, which forced duty
+        *  cycle straight down to ui8_pedal_sync_bemf_duty_target whenever latched.
+        *  Never tuned against this bike's actual gear ratio/hall-tick behavior -
+        *  real-hardware bring-up found it false-triggering during pedaling-free
+        *  walk-assist/cruise-override (2026-08-24 fix, since superseded by this
+        *  removal) AND during completely ordinary PAS-mode pedaling (misread as
+        *  clutch slip), reported as "crunchy/grinding, completely unusable" assist.
+        *  The pre-dzid26-merge firmware had no equivalent mechanism at all.
         */
-        #define OVERRUN_SLIPPAGE_MAX        MOTOR_HALL_STATES * MOTOR_POLE_PAIRS // one mechanical rotation
-        #define OVERRUN_SLIP_ERPS_MAX       40U // or 25 ERPS ≈ 3 RPM
-        #define OVERRUN_SLIP_INVERS_COEFF   ((uint8_t)(MOTOR_TASK_FREQ / (OVERRUN_SLIP_ERPS_MAX * MOTOR_HALL_STATES)))
-        static uint8_t overrun = false; //true if motor rotating faster than pedals
-        static uint16_t pas_hall_snapshot = 0; // motor hall tick snapshot at PAS state change
-        uint16_t pas_hall_delta = motor_hall_ticks - pas_hall_snapshot; // hall ticks since last PAS state change
-        if (!overrun) {
-            if (pas_hall_delta > MOTOR_HALL_TICKS_EVERY_CADENCE_TICK) { // positive slip - (prevent overflow)
-                uint16_t motor_slippage = pas_hall_delta - MOTOR_HALL_TICKS_EVERY_CADENCE_TICK;
-                if((((uint16_t)(motor_slippage * OVERRUN_SLIP_INVERS_COEFF) > ui16_cadence_sensor_ticks)
-                   || ((motor_slippage > OVERRUN_SLIPPAGE_MAX) && (ui16_cadence_sensor_ticks < CADENCE_TICKS_STOP)))) { // todo  cadence check even needed?
-                    overrun = true;
-                }
-            }
-        } else {
-            if(ui16_hall_counter_total == UINT16_MAX) {
-                overrun = false;
-                pas_hall_snapshot = motor_hall_ticks;
-            }
-            /* and overrun clears on PAS state change */
-        }
-		
+
         /****************************************************************************/
         // PWM duty_cycle controller:
         // - limit battery undervolt
@@ -918,18 +903,10 @@ INTERRUPT_HANDLER(TIM1_CAP_COM_IRQHandler, TIM1_CAP_COM_IRQHANDLER) {
           || (ui16_hall_counter_total < (HALL_COUNTER_FREQ / MOTOR_OVER_SPEED_ERPS))
           || (ui16_adc_voltage_filtered < ui16_adc_voltage_cut_off)
           || (ui8_brake_state)
-          || (overrun && ((ui8_riding_torque_mode && !ui8_throttle_adc_map)    ))// || pedals_torque_loaded))//check for overrun in torque modes unless throttle is applied. Don't check ofr overrun in non-torque modes i.e. cadence or cruise modes unless pedals are loaded.
           ) {
-			
+
             // reset duty cycle ramp up counter (filter)
             ui8_counter_duty_cycle_ramp_up = 0;
-
-            // jump down to estimated no-torque duty to quickly stop overrun
-            if (overrun && (ui8_g_duty_cycle > ui8_pedal_sync_bemf_duty_target)) {
-                // on overrun reduce straight to target bemf voltage to remove torque quickly
-                ui8_g_duty_cycle = ui8_pedal_sync_bemf_duty_target;
-                ui8_fw_hall_counter_offset = 0;
-            }
 			
             // ramp down duty cycle
             if (++ui8_counter_duty_cycle_ramp_down > ui8_controller_duty_cycle_ramp_down_inverse_step) {
@@ -1038,12 +1015,6 @@ INTERRUPT_HANDLER(TIM1_CAP_COM_IRQHandler, TIM1_CAP_COM_IRQHANDLER) {
         static uint16_t ui16_pas_state_cnt[CADENCE_SENSOR_STATES] = {CADENCE_TICKS_STOP, CADENCE_TICKS_STOP, CADENCE_TICKS_STOP, CADENCE_TICKS_STOP};
 
         if (ui8_pas_state != ui8_pas_state_prev) {
-            // reevaluate overrun since the last cadence pulse
-            if (overrun){ 
-                //hysteresis - overrun cleared when counter matches expected ticks
-                overrun = (pas_hall_delta > (uint16_t)(MOTOR_HALL_TICKS_EVERY_CADENCE_TICK + 1U));
-            }
-            pas_hall_snapshot = motor_hall_ticks;
             if (ui8_pas_state_prev == ui8_pas_prev_state[ui8_pas_state]) {//forward direction
                 if (ui16_pas_state_cnt[ui8_pas_state] < CADENCE_TICKS_STOP) {//normal operation - not stopped
                     ui16_cadence_sensor_ticks = ui16_pas_state_cnt[ui8_pas_state];

@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "sourceImport": "liberte-plus-20260812-083803EDT.ini",
-  "notes": "48V TSDZ2B motor and DZ40 Display. This setup has no dedicated throttle, every stat is virtually maxed out. Cruise Control override for Walk Assist modes. Be mindful not to overheat and shred motor.",
+  "notes": "48V TSDZ2B motor and Bafang 860C UART Display. This setup has no dedicated throttle, every stat is virtually maxed out. Be mindful not to overheat and shred motor.",
   "fields": {
     "motorTypeTSDZ2_36V": false,
     "motorTypeTSDZ2_48V": true,
@@ -45,7 +45,7 @@
     "optionalAdcThrottle": false,
     "optionalAdcTemperature": false,
     "streetModeOnStart": false,
-    "setParamOnStart": false,
+    "setParamOnStart": true,
     "odoCompensation": false,
     "startupBoostOnStart": true,
     "torqueSensorAdvOnStart": false,
@@ -168,9 +168,9 @@
     "cruiseOverrideTurbo": true,
     "cruiseOverrideEco": false,
     "cruiseOverrideTour": true,
-    "displayTypeDZ40": true,
+    "displayTypeDZ40": false,
     "batterySagIndicatorEnabled": true,
     "batteryVoltageSagFilterShift": 10,
-    "displayType860C": false
+    "displayType860C": true
   }
 }

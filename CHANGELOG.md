@@ -23,7 +23,9 @@ This log starts from when the two firmwares' history was reorganized under
 - "OSF Modern" LVGL dashboard theme for 860C/850C/850C_2021 - full rewrite
   of the main riding screen, graph screens, config screen, boot screen, and
   fault screen (`firmwares/display/860C/common/src/theme_osf_modern.c`,
-  `dashboard_theme.c`).
+  `dashboard_theme.c`). Flashed and ridden on a real 860C (V13) as of
+  2026-08-27; 850C/850C_2021 share this source but haven't had their own
+  hardware pass yet.
 - Assist level capped at 5 (was 9), matching the DZ40 display's 5 physical
   PAS gears.
 - Motor power bar scaling options reordered into sequential order
@@ -45,13 +47,15 @@ This log starts from when the two firmwares' history was reorganized under
   `860C-1.0.0+V13.bootloader.bin` - see `releases/display/README.md`.
 - CRC16 UART protocol port for 860C/850C (paired with the matching motor
   firmware change below), gated off by default
-  (`ENABLE_860C_LVGL_UART` in `config.h`).
+  (`ENABLE_860C_LVGL_UART` in `config.h`). Hardware-verified along with the
+  theme above - the 860C ride exercises this protocol live, not just the sim.
 
 ### Motor firmware
 
 - CRC16 UART protocol support for 860C/850C displays running the new LVGL
   UART protocol, gated off by default alongside the display-side flag
-  above - existing DZ40 pairings are unaffected.
+  above - existing DZ40 pairings are unaffected. Hardware-verified as of
+  2026-08-27 (see display firmware entry above).
 
 ### Repo structure
 

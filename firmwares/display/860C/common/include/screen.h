@@ -255,6 +255,10 @@ typedef struct {
   bool dirty :1; // true if this data has changed and needs to be rerendered
   bool blink :1; // if true, we should invoke the render function for this field every 500ms (or whatever the blink interval is) to possibly toggle animations on/off
   bool is_selected :1; // if true this field is currently selected by the user (either in a scrollable or actively editing it)
+  bool locked :1; // runtime-only read-only override (unlike editable.read_only, which is
+                  // baked into the const Field at compile time) - e.g. a field another
+                  // live setting has made irrelevant. Renderer treats read_only||locked
+                  // identically for styling/edit-gating.
   FielVisibility visibility :2; // if the field is visible or not
   // bool is_rendered : 1; // true if we're showing this field on the current screen (if false, some fieldPrintf work can be avoided
 
@@ -342,6 +346,7 @@ typedef const struct Field {
 					const uint8_t div_digits :4; // how many auto_thresholdsdigits to divide by for fractions (i.e. 0 for integers, 1 for /10x, 2 for /100x, 3 /1000x
 					const bool hide_fraction :1; // if set, don't ever show the fractional part
 					const bool is_signed :1; // if set, the target is a signed int (int8_t/int16_t/int32_t), read/written with sign extension
+					const bool no_wrap :1; // if set, +/- clamps at min/max instead of looping around - for values where wrapping (e.g. decrementing past 0 straight to the max) is nonsensical, like a Wh counter
  					uint32_t max_value, min_value; // min/max
 					const uint32_t inc_step; // if zero, then 1 is assumed
           void (*onSetEditable)(uint32_t v); // called before a new edited value is updated

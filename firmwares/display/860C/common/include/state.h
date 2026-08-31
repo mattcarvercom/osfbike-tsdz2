@@ -171,6 +171,19 @@ typedef struct rt_vars_struct {
 	uint8_t ui8_motor_power_limit_div25;
 	//uint16_t ui16_motor_power_limit;
 	//uint8_t ui8_target_max_battery_power_div25;
+
+	// 2026-08-28: telemetry read back from the motor's own real config
+	// (COMM_FRAME_TYPE_PERIODIC, ebike_app.c) - see that frame's tx_buffer
+	// comment for the wire layout. 0 until the first valid periodic frame
+	// arrives after power-on; callers that can't tolerate that (odometer
+	// math) fall back to ui16_wheel_perimeter until then. Purely diagnostic/
+	// corrective - never written back to the display's own EEPROM, unlike
+	// ui16_wheel_perimeter above.
+	uint16_t ui16_motor_wheel_perimeter;
+	uint8_t ui8_motor_battery_current_max;
+	uint16_t ui16_motor_target_max_power;
+	uint16_t ui16_motor_battery_capacity;
+
 	uint8_t ui8_battery_max_current;
 	uint8_t ui8_motor_max_current;
 	uint8_t ui8_field_weakening_feature_enabled;
@@ -304,7 +317,6 @@ typedef struct ui_vars_struct {
 	uint8_t ui8_motor_hall_sensors;
 	uint8_t ui8_motor_temperature;
 	uint32_t ui32_wheel_speed_sensor_tick_counter;
-	uint32_t ui32_wheel_speed_sensor_tick_counter_offset;
 	uint16_t ui16_battery_voltage_filtered_x10;
 	uint16_t ui16_battery_current_filtered_x5;
 	uint16_t ui16_motor_current_filtered_x5;
@@ -333,8 +345,18 @@ typedef struct ui_vars_struct {
 	uint16_t ui16_service_b_distance;
 	uint8_t ui8_service_a_distance_enable;
 	uint8_t ui8_service_b_distance_enable;
+	/* Trip memories -> "Auto reset trip on power-on" - see main.c's boot
+	 * sequence (right after eeprom_init()) for where this is actually
+	 * acted on. */
+	uint8_t ui8_auto_reset_trip_on_poweron;
+	/* Trip memories -> "Auto pause" - see state.c's rt_calc_trips() 1s
+	 * timer tick for where this is acted on. Default off: trip time counts
+	 * continuously once the trip starts (elapsed on-bike time), matching
+	 * "a trip is when you get on the bike and when you get off" rather
+	 * than moving-time-only. */
+	uint8_t ui8_trip_auto_pause_enabled;
 #endif
-	
+
 	uint8_t ui8_assist_level;
 	uint8_t ui8_number_of_assist_levels;
 	uint16_t ui16_wheel_perimeter;
@@ -350,6 +372,15 @@ typedef struct ui_vars_struct {
 	//uint8_t ui8_target_max_battery_power_div25;
 	//uint16_t ui16_target_max_battery_power;
 	uint16_t ui16_max_motor_power;
+
+	// mirrors rt_vars_t's own copy (state.h above) - kept in sync every
+	// cycle by copy_rt_to_ui_vars() so technicalMenus (configscreen.c) can
+	// render them like any other live UART-sourced field.
+	uint16_t ui16_motor_wheel_perimeter;
+	uint8_t ui8_motor_battery_current_max;
+	uint16_t ui16_motor_target_max_power;
+	uint16_t ui16_motor_battery_capacity;
+
 	uint8_t ui8_battery_max_current;
 	uint8_t ui8_motor_max_current;
 	uint8_t ui8_auto_startup_assist_time;
@@ -466,6 +497,10 @@ typedef struct ui_vars_struct {
   uint8_t ui8_light_sensor_enabled;
   uint8_t ui8_light_sensor_sensitivity;
   uint8_t ui8_light_sensor_hysteresis;
+  uint8_t ui8_auto_brightness_enabled;
+  uint8_t ui8_auto_brightness_min;
+  uint8_t ui8_auto_brightness_max;
+  uint8_t ui8_current_brightness_percent; // RAM only, not persisted - live readout for the config menu
 #endif
   uint8_t ui8_startup_assist_level;
   uint8_t ui8_startup_ridimg_mode;

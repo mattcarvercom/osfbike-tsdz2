@@ -29,6 +29,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # actions/checkout doesn't init submodules by default, and this repo's
+      # other vendored submodules (sdcc/stlink/lvgl/etc.) are large C
+      # toolchain checkouts this job never needs - only init the one this
+      # build actually touches (uart-transport.ts's dynamic import of the
+      # vendored WebUSB-serial shim for Android flashing).
+      - name: Init webserial-esptool submodule
+        run: git submodule update --init vendor/webserial-esptool
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

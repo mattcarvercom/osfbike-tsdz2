@@ -14,7 +14,23 @@
 #include "eeprom.h"
 #include "ebike_app.h"
 
-static const uint8_t ui8_default_array[EEPROM_BYTES_STORED] = 
+// DEFAULT_VALUE_KEY (204 + EEPROM_LAYOUT_VERSION, see eeprom.h) exceeds 127,
+// which SDCC's STM8 port flags as warning 158 ("overflow in implicit constant
+// conversion") when narrowed into this uint8_t array - pre-existing even at
+// the stock value of 204, confirmed via a clean before/after native build.
+// The value is completely valid for uint8_t's real 0-255 range; this is
+// SDCC treating a bare integer literal as signed before the narrowing
+// conversion. Scoped rather than a blanket disable so it doesn't also
+// swallow a genuinely different warning 158 elsewhere in this file.
+// #pragma save/disable_warning/restore are SDCC-only directives - guarded so
+// native gcc (the tests/ cffi harness, CI's --Werror build) preprocesses them
+// away entirely instead of erroring on -Werror=unknown-pragmas. __SDCC is
+// SDCC's own always-defined predefined macro.
+#ifdef __SDCC
+#pragma save
+#pragma disable_warning 158
+#endif
+static const uint8_t ui8_default_array[EEPROM_BYTES_STORED] =
 {
   DEFAULT_VALUE_KEY,							// 0 + EEPROM_BASE_ADDRESS (Array index)
   BATTERY_CURRENT_MAX,							// 1 + EEPROM_BASE_ADDRESS
@@ -38,6 +54,9 @@ static const uint8_t ui8_default_array[EEPROM_BYTES_STORED] =
   SOC_PERCENT_CALC,								// 18 + EEPROM_BASE_ADDRESS
   TORQUE_SENSOR_ADV_ON_STARTUP					// 19 + EEPROM_BASE_ADDRESS
 };
+#ifdef __SDCC
+#pragma restore
+#endif
 
 static uint8_t ui8_error_number = 0;
 
@@ -178,9 +197,19 @@ void EEPROM_controller(uint8_t ui8_operation, uint8_t ui8_byte_init)
     
     
     case WRITE_TO_MEMORY:
-    
+
+      // see ui8_default_array's matching pragma above - same pre-existing
+      // warning 158, same reason (DEFAULT_VALUE_KEY > 127). Also
+      // __SDCC-guarded, same reason as that copy.
+#ifdef __SDCC
+#pragma save
+#pragma disable_warning 158
+#endif
       ui8_array[0] = DEFAULT_VALUE_KEY;
-    
+#ifdef __SDCC
+#pragma restore
+#endif
+
       //ui8_array[ADDRESS_MOTOR_POWER_X10 - EEPROM_BASE_ADDRESS] = p_configuration_variables->ui8_motor_power_x10; // NOT USED
       ui8_array[ADDRESS_BATTERY_CURRENT_MAX - EEPROM_BASE_ADDRESS] = p_configuration_variables->ui8_battery_current_max;
 			

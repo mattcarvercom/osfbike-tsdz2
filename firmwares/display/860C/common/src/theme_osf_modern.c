@@ -12,6 +12,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <strings.h> /* strcasecmp() - not declared by <string.h> alone */
 
 #include "buttons.h"
 #include "dashboard_theme.h"
@@ -20,6 +21,17 @@
 #include "screen.h"
 #include "configscreen.h"
 #include "state.h"
+#include "timer.h"
+#include "utils.h"
+
+/* Real-hardware-only: the RX byte counter incrementing in usart1.c's
+ * USART1_IRQHandler, shown on the boot screen as a live "is anything
+ * arriving from the motor?" diagnostic while the handshake stalls. Not
+ * included (and not referenced) in the WASM display sim, which has no real
+ * UART and fakes an instantly-ready motor. */
+#ifdef STM32F10X_MD
+#include "usart1.h"
+#endif
 
 /* Custom digits-only speed font, lv_font_speed_hero.c - not part of any
  * LVGL header (unlike the built-in lv_font_montserrat_* fonts, declared in
@@ -97,12 +109,17 @@ extern const lv_font_t lv_font_speed_hero;
  * speed+unit cluster's total width for centering. */
 #define HERO_UNIT_GAP 4
 
-/* No motor-power-style configured max exists for human power anywhere in
- * this firmware (unlike ui_vars.ui16_max_motor_power, a real configured
- * watt limit) - riders just produce whatever they produce. This is a
- * placeholder reference for scaling the left-hand bar to a 0-100% range;
- * adjust to taste. */
-#define HUMAN_POWER_BAR_MAX_WATTS 400
+/* Both side bars scale against a fixed 500W, not either rider's own
+ * configured motor power ceiling - originally the motor bar scaled against
+ * ui_vars.ui16_max_motor_power (the rider's real configured watt limit),
+ * but that made the bar's visual scale move every time that limit changed
+ * (real-hardware bring-up 2026-08-29: raising the offroad power limit
+ * config to 1200W made the same real wattage fill barely half the bar it
+ * used to fill against a smaller limit). pct_clamped() already pegs at
+ * 100% for anything over this, so a genuine >500W reading just holds the
+ * bar full instead of being scaled down - exactly the desired behavior. */
+#define HUMAN_POWER_BAR_MAX_WATTS 500
+#define MOTOR_POWER_BAR_MAX_WATTS 500
 
 /* Built once in build_main_screen(), refreshed every tick in
  * update_main_screen() - same split every theme's screens will use. */
@@ -119,6 +136,7 @@ static lv_obj_t *battery_bar;
 static lv_obj_t *battery_pct_label;
 static lv_obj_t *error_icon;
 static lv_obj_t *lights_icon;
+static lv_obj_t *service_icon;
 static lv_obj_t *clock_label;
 static lv_obj_t *assist_card;
 static lv_obj_t *assist_card_label;
@@ -142,11 +160,22 @@ static lv_obj_t *motor_power_value;
 
 /* Boot screen only. */
 static lv_obj_t *boot_status_label;
+/* Animated ellipsis and RX byte counter are separate labels from the status
+ * text so the base text ("Connecting to motor", etc.) never shifts sideways
+ * as the dots grow/shrink. */
+static lv_obj_t *boot_status_dots_label;
+static lv_obj_t *boot_status_rx_label;
 /* Ticks (20ms each) since the boot screen was built - see
  * update_boot_screen()'s doc comment on why there's a minimum dwell time
  * even though the real motor handshake usually takes far longer than it on
  * its own. */
 static uint16_t boot_screen_ticks;
+/* Set once firmware_integrity_check_ok() has actually run - gates it to
+ * exactly one tick, both so its ~100-200ms CRC-over-the-whole-image
+ * blocking call only ever costs one frame and so its result (integrity_ok)
+ * stays stable afterwards instead of re-running every 20ms. */
+static bool boot_integrity_checked;
+static bool boot_integrity_ok;
 
 /* Small header-over-value stat tile; returns the value label so the caller
  * can update it later. out_header (NULL if the caller's header text never
@@ -273,7 +302,16 @@ static lv_obj_t *make_power_bar(lv_obj_t *parent, lv_coord_t x, lv_obj_t **out_p
   lv_obj_set_style_bg_color(bar, lv_color_white(), LV_PART_INDICATOR);
   lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
   lv_bar_set_range(bar, 0, 100);
-  lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+  lv_bar_set_value(bar, 0, LV_ANIM_OFF); /* nothing to glide from yet at creation */
+  /* update_power_bar()'s live updates use LV_ANIM_ON, which needs a nonzero
+   * anim_time to actually glide (LVGL's default is 0, i.e. instant, same as
+   * ANIM_OFF) - 300ms is a few real telemetry updates' worth (~100ms
+   * cadence), smooth without visibly lagging behind. Was an instant
+   * snap-to-value on every update until this fix - reported 2026-08-23 as
+   * "choppy in sudden increments" during real-hardware bench testing (a
+   * real characteristic, not a bench-only artifact - same code path drives
+   * this on an actual ride, since real telemetry updates through here too). */
+  lv_obj_set_style_anim_time(bar, 300, 0);
   /* Full screen height - vertical orientation is automatic (height > width). */
   lv_obj_set_size(bar, SIDE_BAR_W, 480);
   lv_obj_set_pos(bar, x, 0);
@@ -316,6 +354,24 @@ static lv_obj_t *make_headlight_icon(lv_obj_t *parent, lv_coord_t x) {
   lv_img_set_src(img, &icon_headlight);
   lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
   lv_obj_set_style_img_recolor(img, COLOR_LIGHTS_ON, 0);
+  lv_obj_set_pos(img, x, 11);
+  lv_obj_add_flag(img, LV_OBJ_FLAG_HIDDEN);
+  return img;
+}
+
+/* Service-due indicator: a real vector icon (icons_osf_modern.h's
+ * icon_wrench, see that file for provenance) shown whenever either A or B
+ * service (Configurations -> Bike) is enabled and its countdown distance
+ * (mainscreen.c's rt_calc_odometer(), decremented once per real km ridden)
+ * has reached 0 - the same condition mainscreen.c's own renderWarning()
+ * checks for its one-time boot splash, just made persistent here instead
+ * of only showing for a few seconds after power-on. Yellow (COLOR_BATTERY_LOW)
+ * rather than COLOR_ERROR - a due service isn't a fault, just a reminder. */
+static lv_obj_t *make_service_icon(lv_obj_t *parent, lv_coord_t x) {
+  lv_obj_t *img = lv_img_create(parent);
+  lv_img_set_src(img, &icon_wrench);
+  lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
+  lv_obj_set_style_img_recolor(img, COLOR_BATTERY_LOW, 0);
   lv_obj_set_pos(img, x, 11);
   lv_obj_add_flag(img, LV_OBJ_FLAG_HIDDEN);
   return img;
@@ -430,7 +486,7 @@ static void update_power_bar(lv_obj_t *bar, lv_obj_t *peak, lv_obj_t *value_labe
 
   uint32_t scaled = (watts * opt->scale_x10) / 10;
   uint8_t pct = pct_clamped(scaled, bar_max);
-  lv_bar_set_value(bar, pct, LV_ANIM_OFF);
+  lv_bar_set_value(bar, pct, LV_ANIM_ON);
 
   uint8_t peak_pct = power_bar_peak_tick(peak_state, pct);
   lv_coord_t bar_h = 480; /* matches make_power_bar()'s own fixed height */
@@ -489,34 +545,6 @@ static bool chart_rescale_to_data(lv_obj_t *chart, lv_chart_series_t *series, in
   return true;
 }
 
-/* Demo-mode only (see g_graph_screen_demo_mode below) - fills a chart's
- * full point count immediately with a plausible-looking wave centered on
- * `base`, instead of leaving it empty until enough real samples
- * accumulate. Deterministic integer triangle wave, not actual randomness
- * or a real sinf() - there's no requirement this look like real ride data,
- * only that it reads as "a graph with a moving line" at a glance, and
- * integer math avoids pulling libm's sin() into the real firmware link
- * (both call sites below are real, reachable code even though
- * g_graph_screen_demo_mode is always false on real hardware, so neither is
- * `--gc-sections`-eligible the way a truly unreferenced symbol would be -
- * see UNIVERSAL_FIRMWARE_PLAN.md's Phase 0.1 spike for that mechanism and
- * why it doesn't apply to a runtime-gated call). `period` is how many
- * points make one full up/down cycle - callers pick it relative to their
- * own point count so the wave reads as a few clean cycles, not a jagged
- * saw or one barely-visible bump. */
-static void seed_chart_demo_wave(lv_obj_t *chart, lv_chart_series_t *series, int npoints, int32_t base, int period) {
-  int32_t amp = base / 5;
-  if (amp < 2) amp = 3;
-  for (int i = 0; i < npoints; i++) {
-    int phase = i % period;
-    int32_t tri = phase < period / 2 ? phase : (period - phase); /* 0 -> period/2 -> 0 */
-    int32_t offset = -amp + (4 * amp * tri) / period;             /* -amp .. +amp (0 at tri=0, +amp at tri=period/2) */
-    int32_t v = base + offset;
-    if (v < 0) v = 0;
-    lv_chart_set_next_value(chart, series, (lv_coord_t)v);
-  }
-}
-
 /* Sim-only "make it visibly alive for a quick look" mode - real hardware
  * never sets this (only wasm-display-sim/sim_glue.c's sim_init() does, see
  * its own comment), so it stays permanently false and free of runtime cost
@@ -530,12 +558,25 @@ static void seed_chart_demo_wave(lv_obj_t *chart, lv_chart_series_t *series, int
  * both the mini graph and the full graph screen - see each one's own notes
  * on what it changes there. Declared here (rather than down by the full
  * graph screen, where it used to live) since the mini graph needs it too
- * and comes first in the file. */
+ * and comes first in the file.
+ *
+ * Only controls sample cadence now (700ms vs. the real several-second
+ * interval, so the graphs visibly fill within the sim's own boot warm-up
+ * instead of needing real minutes of wall-clock time) - it used to also
+ * trigger a fabricated wave-shaped seed fill (seed_chart_demo_wave(),
+ * removed) so the graphs weren't empty at first paint, but
+ * wasm-display-sim/sim_glue.c's sim_init() now runs ~90 simulated seconds
+ * through this exact real tick path before the page is ever shown, which
+ * - at this accelerated cadence - is enough to genuinely fill both charts
+ * with real (if synthetic-telemetry-driven) samples the same way real
+ * riding would, so a fake fallback wave is no longer needed. */
 bool g_graph_screen_demo_mode;
 
 extern Field graph2;
 extern Field graph3;
 extern Field wheelSpeedGraph; /* mainscreen.h - real speed graph field, see mini_graph_options[] below */
+extern Field batteryPowerGraph; /* mainscreen.h - motor power graph field, see graph_screen_shows_motor_power() below */
+extern Field humanPowerGraph; /* mainscreen.h - human power graph field, overlaid on batteryPowerGraph - see same */
 extern Field tripADistanceField; /* mainscreen.h - real trip-A distance field, see the main screen's trip tile */
 extern Field odoField; /* mainscreen.h - real lifetime odometer field, see the main screen's odometer readout */
 extern bool mainScreenOnPress(buttons_events_t events); /* mainscreen.h - real UP/DOWN assist-level handler, see build_main_screen()/build_graph_screen() */
@@ -638,7 +679,19 @@ static void mini_card_render_stat(lv_obj_t *head, lv_obj_t *value, uint8_t optio
  * MINI_GRAPH_POINTS, nothing like the old 46KB g_graphData (see the full
  * graph screen's header comment for that history). */
 #define MINI_GRAPH_POINTS 40
-#define MINI_GRAPH_POINT_MS 15000u /* mirrors GRAPH_POINT_MS's real per-point cadence - same real-world timing as any other graph field */
+/* mirrors GRAPH_POINT_MS's real per-point cadence, see that constant's own
+ * comment for why both were dropped from 15000 (10/15-minute windows) to
+ * 3000, then to 1000, on 2026-08-23 - was originally meant to match the
+ * full graph screen's real-world timescale, but at 15000 a rider (or bench
+ * tester) genuinely has to wait 10 real minutes to see this fill even
+ * once. 1000 matches the existing "Display UI sim" page's own mini-graph
+ * cadence (reported 2026-08-23: "about 1s (not 3s)"), which itself samples
+ * every real GRAPH_DATA_0_INTERVAL_MS-equivalent tick via a different,
+ * independent accumulator (screen.c's rt_graph_process(), not this file's
+ * own point timer - see this file's "Deliberately does NOT port screen.c's
+ * g_graphData..." comment further down for why the two are unrelated code
+ * paths that just happen to now share the same cadence). */
+#define MINI_GRAPH_POINT_MS 1000u
 #define MINI_GRAPH_DEMO_POINT_MS 700u
 
 static lv_obj_t *mini_graph_chart;
@@ -651,7 +704,12 @@ static lv_chart_cursor_t *mini_graph_avg_cursor; /* horizontal "average" referen
 static lv_obj_t *mini_graph_min_label, *mini_graph_max_label, *mini_graph_avg_label;
 static int32_t mini_graph_sample_sum;
 static uint16_t mini_graph_sample_count;
-static uint32_t mini_graph_ms_since_point;
+/* Real timestamp (get_time_base_counter_1ms(), timer.h) the last point
+ * landed at - was a "+= 20 assumed ms per tick" accumulator, which ran
+ * ~4-6x slower than coded on real hardware for the same reason
+ * buttons.c's TIME_1 did (see that file's header comment) - fixed
+ * 2026-08-23 alongside it. */
+static uint32_t mini_graph_last_point_ms;
 
 /* Option order/count must match the "Mini-Graph" menu (configscreen.c) -
  * its stored index is used directly as this array's index. */
@@ -708,11 +766,10 @@ static void mini_graph_update(void) {
   int32_t disp = field_to_display_value(source, (int32_t)field_read_uint(source));
   mini_graph_sample_sum += disp;
   mini_graph_sample_count++;
-  mini_graph_ms_since_point += 20; /* real 20ms tick, see update_graph_screen()'s own comment on this */
 
   uint32_t interval = g_graph_screen_demo_mode ? MINI_GRAPH_DEMO_POINT_MS : MINI_GRAPH_POINT_MS;
-  if (mini_graph_ms_since_point >= interval) {
-    mini_graph_ms_since_point = 0;
+  if ((get_time_base_counter_1ms() - mini_graph_last_point_ms) >= interval) {
+    mini_graph_last_point_ms = get_time_base_counter_1ms();
     int32_t avg = mini_graph_sample_count ? mini_graph_sample_sum / (int32_t)mini_graph_sample_count : disp;
     mini_graph_sample_sum = 0;
     mini_graph_sample_count = 0;
@@ -823,9 +880,10 @@ static void build_main_screen(lv_obj_t *parent) {
    * space on both sides regardless of "100%" vs "8%" or "HH:MM" width. */
   error_icon = make_error_icon(parent, 140);
   lights_icon = make_headlight_icon(parent, 160);
+  service_icon = make_service_icon(parent, 180);
 
   clock_label = lv_label_create(parent);
-  lv_obj_set_style_text_color(clock_label, COLOR_MUTED, 0);
+  lv_obj_set_style_text_color(clock_label, COLOR_TEXT, 0); // see assist_mode_label's comment above (bottom-row labels)
   lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_14, 0);
   lv_obj_align(clock_label, LV_ALIGN_TOP_RIGHT, -CONTENT_MARGIN, 12);
 
@@ -1047,7 +1105,17 @@ static void build_main_screen(lv_obj_t *parent) {
   lv_chart_set_range(mini_graph_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 1); /* placeholder until the first point lands (demo or real) and chart_rescale_to_data() rescales it */
   mini_graph_sample_sum = 0;
   mini_graph_sample_count = 0;
-  mini_graph_ms_since_point = 0;
+  /* Backdated (not "now") so the very next mini_graph_update() tick already
+   * sees a full interval elapsed and posts a real first point immediately,
+   * instead of leaving the chart empty and the min/max/avg labels at
+   * LVGL's own default placeholder text ("Text", lv_label_create()'s stock
+   * content until the first real lv_label_set_text() call - never happens
+   * until a point lands, since mini_graph_refresh_stat_labels() only runs
+   * from inside that same gated branch) for a full interval after every
+   * boot/screen entry - reported 2026-08-23 ("the graph paint on first
+   * startup so it doesn't say 'Text'"). */
+  mini_graph_last_point_ms =
+    get_time_base_counter_1ms() - (g_graph_screen_demo_mode ? MINI_GRAPH_DEMO_POINT_MS : MINI_GRAPH_POINT_MS);
 
   /* Average-value reference line - horizontal only (LV_DIR_HOR), full chart
    * width, dashed + a contrasting yellow so it reads as distinct from the
@@ -1059,17 +1127,6 @@ static void build_main_screen(lv_obj_t *parent) {
   lv_obj_set_style_line_width(mini_graph_chart, 1, LV_PART_CURSOR);
   lv_obj_set_style_line_dash_width(mini_graph_chart, 4, LV_PART_CURSOR);
   lv_obj_set_style_line_dash_gap(mini_graph_chart, 3, LV_PART_CURSOR);
-
-  if (g_graph_screen_demo_mode) {
-    int32_t base = field_to_display_value(mini_source, (int32_t)field_read_uint(mini_source));
-    seed_chart_demo_wave(mini_graph_chart, mini_graph_series, MINI_GRAPH_POINTS, base, 14);
-    int32_t series_min, series_max, series_avg, axis_min, axis_max;
-    if (chart_rescale_to_data(mini_graph_chart, mini_graph_series, MINI_GRAPH_POINTS, &series_min, &series_max,
-                               &series_avg, &axis_min, &axis_max)) {
-      chart_position_avg_cursor(mini_graph_chart, mini_graph_avg_cursor, series_avg, axis_min, axis_max);
-      mini_graph_refresh_stat_labels(series_min, series_max, series_avg);
-    }
-  }
 
   /* Divider moved up from 436 - the accumulated 2-3px trims to every row
    * above (tiles, mini graph tile) free up room here, spent on the
@@ -1110,7 +1167,10 @@ static void build_main_screen(lv_obj_t *parent) {
   lv_obj_set_style_radius(assist_mode_frame, 8, 0);
 
   assist_mode_label = lv_label_create(parent);
-  lv_obj_set_style_text_color(assist_mode_label, COLOR_MUTED, 0);
+  // COLOR_TEXT (near-white), not COLOR_MUTED - this and the bottom row below are
+  // glanced at mid-ride, and COLOR_MUTED's grey-on-black is real low contrast in
+  // direct sun. Fixed 2026-08-28, reported as unreadable outdoors.
+  lv_obj_set_style_text_color(assist_mode_label, COLOR_TEXT, 0);
   lv_obj_set_style_text_font(assist_mode_label, &lv_font_montserrat_20, 0);
   lv_label_set_text(assist_mode_label, "POWER ASSIST");
   lv_obj_align(assist_mode_label, LV_ALIGN_TOP_MID, 0, 423);
@@ -1123,19 +1183,19 @@ static void build_main_screen(lv_obj_t *parent) {
    * cleaner and leaves the riding-mode frame above with real breathing
    * room instead of overlapping this band by design. */
   human_power_value = lv_label_create(parent);
-  lv_obj_set_style_text_color(human_power_value, COLOR_MUTED, 0);
+  lv_obj_set_style_text_color(human_power_value, COLOR_TEXT, 0); // see assist_mode_label's comment above
   lv_obj_set_style_text_font(human_power_value, &lv_font_montserrat_14, 0);
   lv_label_set_text(human_power_value, "-- W");
   lv_obj_align(human_power_value, LV_ALIGN_BOTTOM_LEFT, CONTENT_MARGIN, -8);
 
   odometer_value = lv_label_create(parent);
-  lv_obj_set_style_text_color(odometer_value, COLOR_MUTED, 0);
+  lv_obj_set_style_text_color(odometer_value, COLOR_TEXT, 0); // see assist_mode_label's comment above
   lv_obj_set_style_text_font(odometer_value, &lv_font_montserrat_14, 0);
   lv_label_set_text(odometer_value, "ODO -- km");
   lv_obj_align(odometer_value, LV_ALIGN_BOTTOM_MID, 0, -8);
 
   motor_power_value = lv_label_create(parent);
-  lv_obj_set_style_text_color(motor_power_value, COLOR_MUTED, 0);
+  lv_obj_set_style_text_color(motor_power_value, COLOR_TEXT, 0); // see assist_mode_label's comment above
   lv_obj_set_style_text_font(motor_power_value, &lv_font_montserrat_14, 0);
   lv_label_set_text(motor_power_value, "-- W");
   lv_obj_align(motor_power_value, LV_ALIGN_BOTTOM_RIGHT, -CONTENT_MARGIN, -8);
@@ -1242,6 +1302,12 @@ static void update_main_screen(void) {
   } else {
     lv_obj_add_flag(lights_icon, LV_OBJ_FLAG_HIDDEN);
   }
+  if ((ui_vars.ui8_service_a_distance_enable && !rt_vars.ui16_service_a_distance)
+      || (ui_vars.ui8_service_b_distance_enable && !rt_vars.ui16_service_b_distance)) {
+    lv_obj_clear_flag(service_icon, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(service_icon, LV_OBJ_FLAG_HIDDEN);
+  }
 
   /* Always Celsius, never converted by screenConvertMiles - the sensor
    * behind this field (the optional LM35, or the motor's own thermal
@@ -1340,17 +1406,17 @@ static void update_main_screen(void) {
     }
   }
 
-  /* Side power bars: motor power scales against the rider's own configured
-   * watt limit (ui_vars.ui16_max_motor_power); human power has no
-   * equivalent configured max anywhere in this firmware, so it scales
-   * against HUMAN_POWER_BAR_MAX_WATTS instead (see its definition above).
-   * Watts aren't a unit screenConvertMiles touches (only distance/speed/
-   * weight/temperature are), so no conversion needed even in imperial mode. */
+  /* Side power bars: both scale against a fixed 500W (see
+   * HUMAN_POWER_BAR_MAX_WATTS/MOTOR_POWER_BAR_MAX_WATTS's own comment above
+   * for why the motor bar isn't scaled against the rider's own configured
+   * watt limit). Watts aren't a unit screenConvertMiles touches (only
+   * distance/speed/weight/temperature are), so no conversion needed even in
+   * imperial mode. */
   update_power_bar(human_power_bar, human_power_peak, human_power_value, rt_vars.ui16_pedal_power_filtered,
                     HUMAN_POWER_BAR_MAX_WATTS, HUMAN_POWER_BAR_SCALE, HUMAN_POWER_BAR_SCALE_COUNT,
                     ui_vars.ui8_human_power_bar_scale, &human_power_peak_state);
   update_power_bar(motor_power_bar, motor_power_peak, motor_power_value, rt_vars.ui16_battery_power_filtered,
-                    ui_vars.ui16_max_motor_power, MOTOR_POWER_BAR_SCALE, MOTOR_POWER_BAR_SCALE_COUNT,
+                    MOTOR_POWER_BAR_MAX_WATTS, MOTOR_POWER_BAR_SCALE, MOTOR_POWER_BAR_SCALE_COUNT,
                     ui_vars.ui8_motor_power_bar_scale, &motor_power_peak_state);
 
   /* Walk assist overrides the normal assist-mode text while genuinely
@@ -1380,7 +1446,7 @@ static void update_main_screen(void) {
       lv_obj_set_style_text_color(assist_mode_label, lv_color_black(), 0);
     } else {
       lv_obj_set_style_bg_opa(assist_mode_frame, LV_OPA_TRANSP, 0);
-      lv_obj_set_style_text_color(assist_mode_label, COLOR_MUTED, 0);
+      lv_obj_set_style_text_color(assist_mode_label, COLOR_TEXT, 0); // see this label's creation-time comment
     }
     /* Same assist-mode strings/mapping as mainscreen.c's own transient
      * display (screen_clock()'s "display riding mode" block - stock's own
@@ -1668,7 +1734,17 @@ static void format_number(char *buf, size_t n, int32_t v, uint8_t div_digits, bo
  * addressable follow-ups, not forgotten; today's slot/variable is whatever
  * EEPROM already has persisted (configscreen.c's real defaults). */
 #define GRAPH_CHART_POINTS 60
-#define GRAPH_POINT_MS     15000u /* 60 points * 15s = 15-minute rolling window, matching screen.c's shortest real timescale */
+/* Originally 15000 (60 points * 15s = 15-minute rolling window, matching
+ * screen.c's shortest real timescale) - dropped to 3000 on 2026-08-23
+ * (60 points * 3s = 3-minute window) after real-hardware bench testing
+ * (motor-handshake.ts's emulator) showed a 15-minute-to-fill graph reads as
+ * broken - "Text" placeholder labels and no visible line for many real
+ * minutes on first visit, easily mistaken for a hang rather than a slow,
+ * working accumulator. Dropped again to 1000 same day to match the
+ * existing "Display UI sim" page's own mini-graph cadence (60 points * 1s
+ * = 1-minute window). Same tradeoff as the mini graph's own
+ * MINI_GRAPH_POINT_MS just above. */
+#define GRAPH_POINT_MS     1000u
 #define GRAPH_DEMO_POINT_MS 700u /* see g_graph_screen_demo_mode, declared up by the mini graph section */
 
 static lv_obj_t *g_graph_title_label;
@@ -1687,12 +1763,60 @@ static lv_obj_t *g_graph_min_label, *g_graph_max_label, *g_graph_avg_label;
 static const Field *g_graph_var; /* the FieldGraph choice currently on screen */
 static int32_t g_graph_sample_sum;
 static uint16_t g_graph_sample_count;
-static uint32_t g_graph_ms_since_point;
+
+/* Per-slot history so re-entering this screen (PWR-cycling back to it, or
+ * switching slots and back) shows the real recent trend immediately instead
+ * of an empty chart that takes another GRAPH_CHART_POINTS*GRAPH_POINT_MS to
+ * refill - real-hardware bring-up 2026-08-29: a rider switching screens
+ * mid-ride kept finding this blank. This is genuinely cheap (2 slots x 60
+ * lv_coord_t = well under 256 bytes total), unlike the old upstream
+ * g_graphData[VARS_SIZE][3] this file's header comment already explains
+ * avoiding (46KB, permanently allocated for all 14 variables) - the RAM
+ * argument that justified dropping that array doesn't apply to keeping just
+ * the 2 currently-configured slots' own tiny history around. Reset whenever
+ * the slot's configured variable changes (old history is meaningless for a
+ * different quantity), same as switching slots already resets on-screen
+ * state today. */
+static lv_coord_t g_graph_history[2][GRAPH_CHART_POINTS];
+static uint8_t g_graph_history_count[2];
+static const Field *g_graph_history_source[2];
+/* Real timestamp (get_time_base_counter_1ms(), timer.h), same fix/reasoning
+ * as mini_graph_last_point_ms just above. */
+static uint32_t g_graph_last_point_ms;
+
+/* Human-power overlay, Motor Power slot only (real-hardware bring-up
+ * 2026-08-29: rider wants to see how much the motor was actually assisting
+ * vs. own effort, not just the motor's own number in isolation). A second
+ * lv_chart series on the same axis/scale as the primary one, driven by its
+ * own tiny accumulator/history exactly mirroring the primary series' own -
+ * see build_graph_screen()/update_graph_screen() for where this turns on.
+ * Deliberately NOT wired into MIN/AVG/MAX (those stay scoped to whichever
+ * variable is actually configured for this slot, i.e. motor power) or its
+ * own persisted color/legend beyond the line itself - a second full stats
+ * row would need a real layout redesign of the 3-tile strip below, out of
+ * scope for what was actually asked (see just how much it was assisting
+ * and when it wasn't - the overlaid line shape already answers that). */
+static lv_chart_series_t *g_graph_series_human;
+static int32_t g_graph_sample_sum_human;
+static uint16_t g_graph_sample_count_human;
+static lv_coord_t g_graph_history_human[2][GRAPH_CHART_POINTS];
+static uint8_t g_graph_history_human_count[2];
+
+static bool graph_screen_shows_motor_power(void) {
+  return g_graph_var == &batteryPowerGraph;
+}
 
 /* Area-fill only now - this chart has no Y-axis tick labels any more (see
  * build_graph_screen()'s "edge-to-edge" comment on why: the MIN/AVG/MAX
  * tiles below it already show that same information, so a gutter reserved
- * just for redundant axis numbers wasn't worth the plot-area cost). */
+ * just for redundant axis numbers wasn't worth the plot-area cost).
+ *
+ * One callback for the whole chart, so the human-power overlay's own area
+ * (when present) fills in this same accent teal rather than its own orange
+ * - chart_fill_area_under_line() doesn't discriminate by series. Left as
+ * one shared wash rather than teasing series identity out of the draw-part
+ * event: both are translucent (LV_OPA_20) and the line colors themselves
+ * already distinguish the two series clearly. */
 static void graph_draw_part_cb(lv_event_t *e) {
   chart_fill_area_under_line(e, COLOR_ACCENT);
 }
@@ -1726,38 +1850,59 @@ static void refresh_graph_stats(const Field *source) {
   chart_position_avg_cursor(g_graph_chart, g_graph_avg_cursor, avg, axis_min, axis_max);
 }
 
+/* Shift-left-append `value` into a GRAPH_CHART_POINTS history buffer -
+ * shared helper for the primary series and the human-power overlay, both
+ * of which need the exact same bookkeeping (see g_graph_history's own
+ * comment for why this exists at all). */
+static void graph_history_push(lv_coord_t *hist, uint8_t *count, lv_coord_t value) {
+  if (*count < GRAPH_CHART_POINTS) {
+    hist[(*count)++] = value;
+  } else {
+    memmove(hist, hist + 1, (GRAPH_CHART_POINTS - 1) * sizeof(lv_coord_t));
+    hist[GRAPH_CHART_POINTS - 1] = value;
+  }
+}
+
 static void update_graph_screen(void) {
   if (!g_graph_var) return;
   const Field *source = g_graph_var->graph.source;
+  bool human_overlay = graph_screen_shows_motor_power();
+  const Field *human_source = humanPowerGraph.graph.source;
 
   int32_t disp = field_to_display_value(source, (int32_t)field_read_uint(source));
   g_graph_sample_sum += disp;
   g_graph_sample_count++;
-  g_graph_ms_since_point += 20; /* update_graph_screen() runs on the real 20ms tick, see dashboard_theme.h's own doc comment on dashboard_theme_tick() */
+
+  int32_t disp_human = 0;
+  if (human_overlay) {
+    disp_human = field_to_display_value(human_source, (int32_t)field_read_uint(human_source));
+    g_graph_sample_sum_human += disp_human;
+    g_graph_sample_count_human++;
+  }
 
   char buf[24];
   format_number(buf, sizeof(buf), disp, source->editable.number.div_digits,
                 source->editable.number.hide_fraction, field_display_units(source));
   lv_label_set_text(g_graph_value_label, buf);
 
-  if (g_graph_ms_since_point >= (g_graph_screen_demo_mode ? GRAPH_DEMO_POINT_MS : GRAPH_POINT_MS)) {
-    g_graph_ms_since_point = 0;
+  if ((get_time_base_counter_1ms() - g_graph_last_point_ms) >= (g_graph_screen_demo_mode ? GRAPH_DEMO_POINT_MS : GRAPH_POINT_MS)) {
+    g_graph_last_point_ms = get_time_base_counter_1ms();
     int32_t avg = g_graph_sample_count ? g_graph_sample_sum / (int32_t)g_graph_sample_count : disp;
     g_graph_sample_sum = 0;
     g_graph_sample_count = 0;
     lv_chart_set_next_value(g_graph_chart, g_graph_series, (lv_coord_t)avg);
     refresh_graph_stats(source);
-  }
-}
+    graph_history_push(g_graph_history[g_graph_screen_slot], &g_graph_history_count[g_graph_screen_slot], (lv_coord_t)avg);
 
-/* Demo-mode only (see g_graph_screen_demo_mode) - fills the chart's full
- * point count immediately via the shared seed_chart_demo_wave(), instead
- * of leaving it empty until enough real samples accumulate. Real
- * accumulation (via update_graph_screen(), same as when this flag is off)
- * takes over immediately afterward and pushes genuine data in on top. */
-static void seed_demo_history(const Field *source) {
-  int32_t base = field_to_display_value(source, (int32_t)field_read_uint(source));
-  seed_chart_demo_wave(g_graph_chart, g_graph_series, GRAPH_CHART_POINTS, base, 20); /* period=20: 3 full up/down cycles across GRAPH_CHART_POINTS=60 */
+    if (human_overlay && g_graph_series_human) {
+      int32_t avg_human = g_graph_sample_count_human
+          ? g_graph_sample_sum_human / (int32_t)g_graph_sample_count_human : disp_human;
+      g_graph_sample_sum_human = 0;
+      g_graph_sample_count_human = 0;
+      lv_chart_set_next_value(g_graph_chart, g_graph_series_human, (lv_coord_t)avg_human);
+      graph_history_push(g_graph_history_human[g_graph_screen_slot], &g_graph_history_human_count[g_graph_screen_slot], (lv_coord_t)avg_human);
+    }
+  }
 }
 
 static void build_graph_screen(lv_obj_t *parent) {
@@ -1780,7 +1925,13 @@ static void build_graph_screen(lv_obj_t *parent) {
   g_graph_var = choice;
   g_graph_sample_sum = 0;
   g_graph_sample_count = 0;
-  g_graph_ms_since_point = 0;
+  g_graph_sample_sum_human = 0;
+  g_graph_sample_count_human = 0;
+  /* Backdated - same reasoning/fix as mini_graph_last_point_ms above, so
+   * this screen's MIN/AVG/MAX tiles and overlay labels show a real number
+   * instead of "Text" on the very first frame after switching here. */
+  g_graph_last_point_ms =
+    get_time_base_counter_1ms() - (g_graph_screen_demo_mode ? GRAPH_DEMO_POINT_MS : GRAPH_POINT_MS);
 
   /* A couple of the 14 graphable fields (batteryPowerUsageFieldGraph is the
    * one this build actually reaches) use a mutable char[] label instead of a
@@ -1795,7 +1946,16 @@ static void build_graph_screen(lv_obj_t *parent) {
   g_graph_title_label = lv_label_create(parent);
   lv_obj_set_style_text_color(g_graph_title_label, COLOR_MUTED, 0);
   lv_obj_set_style_text_font(g_graph_title_label, &lv_font_montserrat_14, 0);
-  lv_label_set_text(g_graph_title_label, title);
+  if (graph_screen_shows_motor_power()) {
+    /* Names the overlay's own color inline rather than a separate legend
+     * widget - cheap and this title is otherwise idle space. 0xFF9500 must
+     * match COLOR_ORANGE, used for g_graph_series_human's own line below -
+     * LVGL's recolor markup takes a literal hex, not a macro reference. */
+    lv_label_set_text_fmt(g_graph_title_label, "%s (+ #FF9500 human#)", title);
+    lv_label_set_recolor(g_graph_title_label, true);
+  } else {
+    lv_label_set_text(g_graph_title_label, title);
+  }
   lv_obj_set_pos(g_graph_title_label, CONTENT_MARGIN, 20);
 
   g_graph_value_label = lv_label_create(parent);
@@ -1844,6 +2004,33 @@ static void build_graph_screen(lv_obj_t *parent) {
   lv_chart_set_all_value(g_graph_chart, g_graph_series, LV_CHART_POINT_NONE);
   lv_chart_set_range(g_graph_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 1); /* placeholder until the first point lands (demo or real) and refresh_graph_stats() rescales it */
 
+  /* Backfill from this slot's own history if we're re-entering on the same
+   * configured variable - see g_graph_history's own comment for why. A
+   * variable change invalidates the old history outright (different units/
+   * scale), same as switching slots already resets everything else here. */
+  if (g_graph_history_source[g_graph_screen_slot] != source) {
+    g_graph_history_source[g_graph_screen_slot] = source;
+    g_graph_history_count[g_graph_screen_slot] = 0;
+    g_graph_history_human_count[g_graph_screen_slot] = 0;
+  } else {
+    for (uint8_t i = 0; i < g_graph_history_count[g_graph_screen_slot]; i++) {
+      lv_chart_set_next_value(g_graph_chart, g_graph_series, g_graph_history[g_graph_screen_slot][i]);
+    }
+  }
+
+  /* Human-power overlay - Motor Power slot only, see g_graph_series_human's
+   * own comment for why this doesn't get its own MIN/AVG/MAX row. Backfills
+   * the same way the primary series just did, from its own history. */
+  if (graph_screen_shows_motor_power()) {
+    g_graph_series_human = lv_chart_add_series(g_graph_chart, COLOR_ORANGE, LV_CHART_AXIS_PRIMARY_Y);
+    lv_chart_set_all_value(g_graph_chart, g_graph_series_human, LV_CHART_POINT_NONE);
+    for (uint8_t i = 0; i < g_graph_history_human_count[g_graph_screen_slot]; i++) {
+      lv_chart_set_next_value(g_graph_chart, g_graph_series_human, g_graph_history_human[g_graph_screen_slot][i]);
+    }
+  } else {
+    g_graph_series_human = NULL;
+  }
+
   /* Same dashed gold average line as the mini graph - see its own build
    * site's comment for why dashed/gold. */
   g_graph_avg_cursor = lv_chart_add_cursor(g_graph_chart, COLOR_GRAPH_AVG, LV_DIR_HOR);
@@ -1887,11 +2074,12 @@ static void build_graph_screen(lv_obj_t *parent) {
   /* Must run after the MIN/AVG/MAX labels above exist - refresh_graph_stats()
    * writes into them directly (g_graph_min_value/_avg_value/_max_value), so
    * calling this any earlier hits stale pointers left over from whichever
-   * screen was showing before this one was built. */
-  if (g_graph_screen_demo_mode) {
-    seed_demo_history(source);
-    refresh_graph_stats(source);
-  }
+   * screen was showing before this one was built - real accumulation
+   * (update_graph_screen(), same on real hardware) fills and refreshes this
+   * naturally as soon as points start landing, same as an empty chart on
+   * real hardware at boot. Also where the history backfill above (if any)
+   * gets its first real stats instead of waiting for the next live point. */
+  if (g_graph_history_count[g_graph_screen_slot] > 0) refresh_graph_stats(source);
 
   /* Small page-dot pair (only 2 graph slots exist, see this section's
    * header comment) - the same "which of a small fixed set of pages am I
@@ -1993,13 +2181,22 @@ static void commit_edit(const Field *f) {
 }
 
 /* Real screen.c semantics: increment/decrement WRAP at the bounds (not
- * clamp) - confirmed by reading changeEditable()'s own "loop around"
- * comments for both EditUInt and EditEnum, matched here since riders
- * coming from the stock UI already expect that behavior. Bounds are
- * compared in DISPLAY units throughout (field_to_display_value()) -
- * comparing g_config_edit_value against the field's raw SI min/max
- * directly would be wrong under imperial (e.g. a mile value clamped
- * against a km-scaled bound).
+ * clamp) for EditEnum, and for EditUInt fields that don't set no_wrap -
+ * confirmed by reading changeEditable()'s own "loop around" comments,
+ * matched here since riders coming from the stock UI already expect that
+ * behavior. An EditUInt field with no_wrap set instead clamps at the
+ * bound - see changeEditable()'s own no_wrap branch (screen.c). This is a
+ * second, independent reimplementation of that same switch (the LVGL
+ * config screen doesn't call changeEditable() at all) - 2026-08-29: this
+ * copy was missing the no_wrap branch entirely, so "Used Wh"/"Battery
+ * total Wh" (configscreen.c, both set no_wrap since 2026-08-28 to stop a
+ * hold-"-"-past-0 overshoot straight to their ~9990/2999 max) still wrapped
+ * on this theme even after that fix landed, because this theme is what the
+ * 860C (and this sim) actually run - screen.c's own copy is effectively
+ * dead code here. Bounds are compared in DISPLAY units throughout
+ * (field_to_display_value()) - comparing g_config_edit_value against the
+ * field's raw SI min/max directly would be wrong under imperial (e.g. a
+ * mile value clamped against a km-scaled bound).
  *
  * fast mirrors changeEditable()'s own x10 parameter: only ever multiplies
  * the step for numeric (EditUInt) fields - screen.c's own switch never
@@ -2020,8 +2217,13 @@ static void adjust_edit_value(const Field *f, int dir, bool fast) {
     int32_t disp_max = field_to_display_value(f, (int32_t)f->editable.number.max_value);
     if (disp_min > disp_max) { int32_t t = disp_min; disp_min = disp_max; disp_max = t; } /* conversion can flip order (e.g. C->F does not) - defensive */
     g_config_edit_value += dir * step;
-    if (g_config_edit_value < disp_min) g_config_edit_value = disp_max;
-    else if (g_config_edit_value > disp_max) g_config_edit_value = disp_min;
+    if (f->editable.number.no_wrap) {
+      if (g_config_edit_value < disp_min) g_config_edit_value = disp_min;
+      else if (g_config_edit_value > disp_max) g_config_edit_value = disp_max;
+    } else {
+      if (g_config_edit_value < disp_min) g_config_edit_value = disp_max;
+      else if (g_config_edit_value > disp_max) g_config_edit_value = disp_min;
+    }
   }
   refresh_editing_row(f);
 }
@@ -2188,11 +2390,11 @@ static void format_scrollable_row_text(char *buf, size_t bufsz, const char *labe
 static lv_obj_t *make_config_row(lv_obj_t *parent, const Field *f, bool selected) {
   lv_obj_t *row = lv_label_create(parent);
   bool editing_this_row = selected && g_config_editing;
-  /* Read-only fields (FieldEditable with .read_only set - FieldScrollable
-   * submenu rows are always "enterable" so never count) get the outline
-   * style instead of the solid-teal one when highlighted - see
-   * style_row_selected_readonly's own comment. */
-  bool read_only_field = f->variant == FieldEditable && f->editable.read_only;
+  /* Read-only fields (FieldEditable with .read_only set, or dynamically
+   * .rw->locked - FieldScrollable submenu rows are always "enterable" so
+   * never count) get the outline style instead of the solid-teal one when
+   * highlighted - see style_row_selected_readonly's own comment. */
+  bool read_only_field = f->variant == FieldEditable && (f->editable.read_only || f->rw->locked);
   lv_style_t *row_style = read_only_field ? &style_row_readonly : &style_row;
   if (editing_this_row) row_style = &style_row_editing;
   else if (selected) row_style = read_only_field ? &style_row_selected_readonly : &style_row_selected;
@@ -2299,7 +2501,7 @@ static bool config_screen_on_press(buttons_events_t events) {
   } else if (events & M_CLICK) {
     if (f) {
       if (f->variant == FieldScrollable) push_level(f);
-      else if (f->variant == FieldEditable && !f->editable.read_only) enter_edit_mode(f);
+      else if (f->variant == FieldEditable && !f->editable.read_only && !f->rw->locked) enter_edit_mode(f);
     }
   } else if (events & ONOFF_CLICK) {
     pop_level_or_exit();
@@ -2340,6 +2542,13 @@ static void update_config_screen(void) {
   config_nav_level_t *level = &g_config_stack[g_config_depth];
   int count = count_supported_fields(level->entries);
   const Field *f = count > 0 ? nth_supported_field(level->entries, level->selected) : NULL;
+
+#ifndef SW102
+  // live-relock every tick, so editing a controlling field updates dependents
+  // immediately - including mid-edit, before the value is committed (see
+  // update_field_locks()'s own doc comment on editing_field/editing_value).
+  update_field_locks(g_config_editing ? f : NULL, g_config_edit_value);
+#endif
 
   static uint16_t up_held_ms, up_since_repeat_ms;
   static uint16_t down_held_ms, down_since_repeat_ms;
@@ -2431,6 +2640,8 @@ static void build_boot_screen(lv_obj_t *parent) {
   lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
   lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
   boot_screen_ticks = 0;
+  boot_integrity_checked = false;
+  boot_integrity_ok = false;
 
   /* Wordmark - "osf." in the normal text color, "bike" in the accent teal,
    * on one line (short enough at 32pt to fit this panel's 296px content
@@ -2464,17 +2675,24 @@ static void build_boot_screen(lv_obj_t *parent) {
    * the same display-only version configscreen.c's "Display firmware"
    * Technical info row shows, so the boot splash and the config menu never
    * disagree with each other. */
+  /* DISPLAY_BUILD_DATE (Makefile.common, auto-computed every build - not
+   * hand-maintained like the version above) trails in parens specifically
+   * so a rebuild that didn't get DISPLAY_FIRMWARE_PATCH bumped still shows
+   * something that visibly changes between flashes - see that variable's
+   * own comment for why this exists. */
   lv_label_set_text(version,
-                     BOOT_SCREEN_TARGET_LABEL "  " DISPLAY_FIRMWARE_MAJOR "." DISPLAY_FIRMWARE_MINOR "." DISPLAY_FIRMWARE_PATCH);
+                     BOOT_SCREEN_TARGET_LABEL "  " DISPLAY_FIRMWARE_MAJOR "." DISPLAY_FIRMWARE_MINOR "." DISPLAY_FIRMWARE_PATCH
+                     " (" DISPLAY_BUILD_DATE ")");
   lv_obj_set_style_text_color(version, COLOR_MUTED, 0);
   lv_obj_set_style_text_font(version, &lv_font_montserrat_14, 0);
   lv_obj_set_width(version, CONTENT_W);
   lv_obj_set_style_text_align(version, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_pos(version, CONTENT_MARGIN, 232);
 
-  /* Updated every tick by update_boot_screen() below - starting text
-   * doesn't matter, it's overwritten before the first frame is ever
-   * flushed to the panel. */
+  /* Status text - centered within the content width (and, like the old
+   * single-label version, free to wrap if an error string ever exceeds it).
+   * Updated every tick by update_boot_screen() below; starting text doesn't
+   * matter, it's overwritten before the first frame is ever flushed. */
   boot_status_label = lv_label_create(parent);
   lv_label_set_text(boot_status_label, "");
   lv_obj_set_style_text_color(boot_status_label, COLOR_TEXT, 0);
@@ -2482,6 +2700,26 @@ static void build_boot_screen(lv_obj_t *parent) {
   lv_obj_set_width(boot_status_label, CONTENT_W);
   lv_obj_set_style_text_align(boot_status_label, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_pos(boot_status_label, CONTENT_MARGIN, 320);
+
+  /* Animated ellipsis - a separate label parked (by update_boot_screen)
+   * immediately right of the status text's right edge, so the status text
+   * never shifts sideways as the dots grow/shrink. */
+  boot_status_dots_label = lv_label_create(parent);
+  lv_label_set_text(boot_status_dots_label, "");
+  lv_obj_set_style_text_color(boot_status_dots_label, COLOR_TEXT, 0);
+  lv_obj_set_style_text_font(boot_status_dots_label, &lv_font_montserrat_20, 0);
+  lv_obj_add_flag(boot_status_dots_label, LV_OBJ_FLAG_HIDDEN);
+
+  /* RX byte counter on its own line below the status text - smaller and
+   * muted to match the version string above, with padding between the two. */
+  boot_status_rx_label = lv_label_create(parent);
+  lv_label_set_text(boot_status_rx_label, "");
+  lv_obj_set_style_text_color(boot_status_rx_label, COLOR_MUTED, 0);
+  lv_obj_set_style_text_font(boot_status_rx_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_width(boot_status_rx_label, CONTENT_W);
+  lv_obj_set_style_text_align(boot_status_rx_label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_pos(boot_status_rx_label, CONTENT_MARGIN, 352);
+  lv_obj_add_flag(boot_status_rx_label, LV_OBJ_FLAG_HIDDEN);
 
   /* Real safety guidance from mainscreen.c's bootStatus1 message - riders
    * historically pull off pedaling/braking right as the display powers up,
@@ -2517,26 +2755,63 @@ static void build_boot_screen(lv_obj_t *parent) {
 #define BOOT_SCREEN_MIN_TICKS 75 /* 75 * 20ms = 1.5s */
 
 static void update_boot_screen(void) {
-  const char *status;
+  const char *status = NULL;
   lv_color_t status_color = COLOR_TEXT;
   bool blocked = false;
   bool ready = false;
+  bool animate = false;
+
+#ifdef STM32F10X_MD
+  /* Runs once, before the motor handshake status below ever shows -
+   * confirms what's actually sitting in flash right now still matches what
+   * was built, catching a bad/incomplete UART bootloader write (see
+   * uart-flasher.ts) that byte-identical source could never reveal.
+   * boot_screen_ticks==0 shows this message for one real frame before the
+   * blocking CRC-over-the-whole-image call below runs (that call itself
+   * takes on the order of 100-200ms on this hardware, which is what
+   * actually makes the message visible - see firmware_integrity_check_ok()
+   * for the cost estimate), otherwise the very first frame the user ever
+   * sees would already show "Connecting to motor...", skipping this step
+   * entirely. */
+  if (!boot_integrity_checked) {
+    if (boot_screen_ticks == 0) {
+      lv_label_set_text(boot_status_label, "Checking firmware integrity...");
+      lv_obj_set_style_text_color(boot_status_label, COLOR_TEXT, 0);
+      boot_screen_ticks++;
+      return;
+    }
+    boot_integrity_checked = true;
+    boot_integrity_ok = firmware_integrity_check_ok();
+  }
+
+  if (!boot_integrity_ok) {
+    /* Same permanently-blocked treatment as a MOTOR_INIT_ERROR* state below
+     * - a corrupted image isn't something to proceed past. */
+    lv_label_set_text(boot_status_label, "Firmware integrity check failed");
+    lv_obj_set_style_text_color(boot_status_label, COLOR_ERROR, 0);
+    if (boot_screen_ticks < 0xFFFF) boot_screen_ticks++;
+    return;
+  }
+#endif
 
   switch (g_motor_init_state) {
     case MOTOR_INIT_GET_MOTOR_ALIVE:
     case MOTOR_INIT_WAIT_MOTOR_ALIVE:
-      status = "Connecting to motor...";
+      status = "Connecting to motor";
+      animate = true;
       break;
     case MOTOR_INIT_GET_MOTOR_FIRMWARE_VERSION:
     case MOTOR_INIT_WAIT_MOTOR_FIRMWARE_VERSION:
     case MOTOR_INIT_GOT_MOTOR_FIRMWARE_VERSION:
     case MOTOR_INIT_RECEIVED_MOTOR_FIRMWARE_VERSION:
-      status = "Reading motor firmware...";
+      status = "Reading motor firmware";
+      animate = true;
       break;
     case MOTOR_INIT_SET_CONFIGURATIONS:
     case MOTOR_INIT_WAIT_CONFIGURATIONS_OK:
     case MOTOR_INIT_WAIT_GOT_CONFIGURATIONS_OK:
-      status = "Sending configuration...";
+      status = "Sending configuration";
+      animate = true;
       break;
     case MOTOR_INIT_READY:
     case MOTOR_INIT_SIMULATING:
@@ -2554,7 +2829,33 @@ static void update_boot_screen(void) {
       break;
   }
 
-  lv_label_set_text(boot_status_label, status);
+  if (animate) {
+    /* The status text only changes on a handshake state transition, which
+     * never happens while no ALIVE frame arrives - so without a live dot
+     * count the screen reads as hung exactly when the motor link is the
+     * thing being debugged. Cycle 0-3 dots (one step per ~120ms) so there's
+     * continuous visual motion, plus the raw RX byte counter on real
+     * hardware so "bytes arriving but no valid frame" vs "nothing arriving
+     * at all" are distinguishable at a glance. */
+    static const char *const dots[] = { "", ".", "..", "..." };
+    lv_label_set_text(boot_status_label, status);
+    lv_label_set_text(boot_status_dots_label, dots[(boot_screen_ticks / 6) & 0x03]);
+    /* Park the dots right after the status text's right edge so they grow
+     * rightward without nudging the centered text sideways. */
+    lv_coord_t text_w = lv_txt_get_width(status, (uint32_t) strlen(status),
+                                         &lv_font_montserrat_20, 0, LV_TEXT_FLAG_NONE);
+    lv_obj_set_pos(boot_status_dots_label, CONTENT_MARGIN + (CONTENT_W + text_w) / 2, 320);
+    lv_obj_clear_flag(boot_status_dots_label, LV_OBJ_FLAG_HIDDEN);
+#ifdef STM32F10X_MD
+    lv_label_set_text_fmt(boot_status_rx_label, "RX %lu",
+                          (unsigned long) ui32_usart1_rx_byte_count);
+    lv_obj_clear_flag(boot_status_rx_label, LV_OBJ_FLAG_HIDDEN);
+#endif
+  } else {
+    lv_label_set_text(boot_status_label, status);
+    lv_obj_add_flag(boot_status_dots_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(boot_status_rx_label, LV_OBJ_FLAG_HIDDEN);
+  }
   lv_obj_set_style_text_color(boot_status_label, status_color, 0);
 
   if (boot_screen_ticks < 0xFFFF) boot_screen_ticks++;

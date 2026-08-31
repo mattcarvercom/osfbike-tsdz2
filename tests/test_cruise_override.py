@@ -64,6 +64,7 @@ WALK_BUTTON_BIT = 0x20  # ui8_rx_buffer[1]
 POWER_ASSIST_MODE = 1
 CRUISE_MODE = 6
 WALK_ASSIST_MODE = 7
+TORQUE_SENSOR_CALIBRATION_MODE = 8
 
 # config.h overrides needed to exercise the feature (stock config.h ships
 # with it disabled). ENABLE_WALK_ASSIST/ENABLE_BRAKE_SENSOR/
@@ -240,6 +241,32 @@ def test_override_sets_a_nonzero_target_speed_on_first_engagement(ebike):
     )
 
 
+def test_override_duty_cycle_survives_smooth_start(ebike):
+    """Regression for bug #4, found on real hardware 2026-08-24: apply_cruise()
+    can correctly compute a large duty cycle target (see the test above) and
+    still have it clamped straight back to ~0 one function call later, by
+    apply_smooth_start() - a pedal-torque/cadence/wheel-speed-based startup
+    voltage limiter (added by the dzid26/TSDZ2-Smart-EBike merge, 2026-08-18)
+    that has an explicit bypass for ui8_walk_assist_flag but, until this fix,
+    none for the walk-assist cruise-override. All three of smooth start's
+    blend inputs (pedal torque, cadence, wheel speed) are genuinely zero on
+    a dead-stop override engagement by design - that's the whole point of the
+    override - so the limiter computed a ~0 startup voltage target and capped
+    duty cycle to it every single cycle, silently overriding apply_cruise()'s
+    real PID output. Reported on real hardware as "nothing happens at TURBO
+    until hand-pedaled to ~20mph, then sputters" - matches exactly: only once
+    real (hand-pedaled) wheel speed pushed the wheel-speed blend term open on
+    its own did any output get through, well past smooth start's intended
+    startup window."""
+    ebike.ui8_adc_battery_current_max = 100  # unset by default in this fixture; needed for ui8_motor_enabled to latch on
+    press_button(ebike, TURBO)
+    ebike.ebike_control_motor()
+    assert ebike.ui8_duty_cycle_target > 0, (
+        "apply_smooth_start() clamped the cruise-override's duty cycle target back "
+        "to ~0 - it has a bypass for ui8_walk_assist_flag but not ui8_cruise_override_flag"
+    )
+
+
 def test_override_targets_the_pre_button_level_not_the_decremented_one(ebike):
     """Regression for bug #2: DZ40/VLCD5 displays report a decremented
     assist level while the walk-assist button is held. Simulates that: the
@@ -389,6 +416,45 @@ def test_override_toggles_are_independent_per_level(ebike):
             f"got riding_mode={ebike.m_configuration_variables.ui8_riding_mode}"
         )
         assert ebike.ui8_cruise_override_flag == 0
+
+
+def test_walk_assist_at_off_does_not_enter_torque_calibration(ebike):
+    """Real hardware bring-up 2026-08-24: holding walk-assist at PAS0/OFF was
+    silently entering TORQUE_SENSOR_CALIBRATION_MODE instead of no-op'ing -
+    ebike_app.c's torque-sensor-calibration branch had OFF-level and
+    ECO-level entry points, both meant as XH18-only accommodations (per the
+    block's own comment) but compiled in unconditionally for every display.
+    On VLCD5/DZ40 - no menu system to give any feedback once inside
+    calibration mode, just a 2-digit LED, and using the same walk-assist
+    button for actual walk assist at both OFF (PAS0) and ECO (PAS1
+    BEFORE_ECO / PAS2 real ECO both resolve to ui8_assist_level == ECO) -
+    this meant the speed display got stuck on a calibration-related value
+    (reported as "12"/"13") with the wheel not even spinning, and stayed
+    stuck until the assist level was raised (calibration's only exit
+    condition), not on button release - and PAS1/PAS2 walk assist got
+    silently hijacked into calibration mode instead of actually walk
+    -assisting. Fix: the whole torque-sensor-calibration-via-walk-assist-
+    button block is now compiled out entirely for non-XH18 displays (no
+    #else) - this repo's config.h ships ENABLE_VLCD5=1/ENABLE_XH18=0, so
+    walk-assist button presses fall through to plain walk assist at every
+    level instead."""
+    ebike.m_configuration_variables.ui8_set_parameter_enabled = 1
+    ebike.ui8_torque_sensor_calibration_enabled = 1
+    for level in (OFF, ECO):
+        _reset(ebike)
+        ebike.m_configuration_variables.ui8_set_parameter_enabled = 1
+        ebike.ui8_torque_sensor_calibration_enabled = 1
+        press_button(ebike, level)
+        assert ebike.m_configuration_variables.ui8_riding_mode != TORQUE_SENSOR_CALIBRATION_MODE, (
+            f"walk-assist button at assist level {level} entered TORQUE_SENSOR_CALIBRATION_MODE - "
+            "the XH18-only calibration entry point is firing on this (non-XH18) display config"
+        )
+        assert ebike.ui8_torque_sensor_calibration_flag == 0
+        if level == ECO:
+            assert ebike.m_configuration_variables.ui8_riding_mode == WALK_ASSIST_MODE, (
+                "expected ECO-level walk-assist button press to fall through to plain "
+                f"walk assist, got riding_mode={ebike.m_configuration_variables.ui8_riding_mode}"
+            )
 
 
 if __name__ == "__main__":

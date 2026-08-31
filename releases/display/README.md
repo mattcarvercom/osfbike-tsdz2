@@ -37,14 +37,17 @@ which is which:
   bootloader-resident link address: `+bootloader`, `+V12.bootloader`,
   `+V13.bootloader`.
 
-`TARGET` should match one of the values in
-`tools/web_configurator/src/render/display-flash-page.ts`'s `TARGET_LABELS`
-(860C, 850C, 850C_2021, SW102), so it's obvious at a glance which board a
-file is for - and so that page's `UART_RELEASE_PREFIXES` prefix-filtered
-dropdown picks it up correctly (matching is prefix-only, e.g. everything
-starting `860C-` regardless of what follows, so it doesn't need updating
-when this project's own version number changes). The web configurator only
-prefix-matches on this, it doesn't otherwise parse/enforce naming.
+`TARGET` should match one of `860C`, `850C`, `850C_2021`, `SW102` (the
+board itself, not a pin-revision variant) so it's obvious at a glance which
+board a file is for - and so that page's `UART_RELEASE_MATCHERS` predicates
+pick it up correctly. The picker's own target list
+(`display-flash-page.ts`'s `TARGET_LABELS`) additionally splits 860C into
+three separate selections - `860C_V13`, `860C_V12`, and plain `860C` (other/
+unknown revision) - but that split lives entirely in `UART_RELEASE_MATCHERS`
+matching against the `860C-`-prefixed filename's SemVer build-metadata
+(`+V12`/`+V13`, or neither for the plain build); it doesn't change this
+naming convention. The web configurator only pattern-matches on this, it
+doesn't otherwise parse/enforce naming.
 
 `firmware-manifest-plugin.ts` lists this folder's top level plus one level
 into `legacy/` (reported as `legacy/<name>`, any *other* subfolder is
@@ -84,25 +87,23 @@ this project's UART flasher). Moved into `legacy/` 2026-08-21, alongside the
 manifest/picker changes to support that split - filenames themselves
 unchanged, still emmebrusa's own upstream naming.
 
-## This repo's own OSF Modern build - current tier (not published here yet)
+## This repo's own OSF Modern build - current tier
 
-Would live at this folder's top level (not `legacy/`) once published - the
-same naming this section used to document (`860C-1.0.0+bootloader.bin`,
+Lives at this folder's top level (not `legacy/`): `860C-1.0.0+bootloader.bin`,
 `860C-1.0.0+V12.bootloader.bin`, `860C-1.0.0+V13.bootloader.bin`,
-`850C-1.0.0+bootloader.bin`, `850C_2021-1.0.0+bootloader.bin`) - built from
+`850C-1.0.0+bootloader.bin`, `850C_2021-1.0.0+bootloader.bin` - built from
 this repo's own `firmwares/display/860C/` (the OSF Modern LVGL theme,
 `theme_osf_modern.c`), **not** the stock emmebrusa UI `legacy/` holds.
 
-**Deliberately not committed to this public repo yet**: builds clean and
-matches the in-browser sim byte-for-byte in behavior as far as the sim can
-exercise it, but as of this write-up no 860C/850C has actually booted this
-firmware on real hardware. Until that's confirmed, publishing prebuilt
-binaries here means asking the public to be the first real-hardware test -
-not something to ask for without saying so loudly, so instead: not
-published until verified. The motor `.hex` in `../motor/` doesn't have
-this caveat - it's been flashed and ridden on real hardware.
+**Published as a public PR, not yet merged**: tracked as `mattcarvercom/osfbike-tsdz2`
+PR #5 ("Display firmware 1.0.0 (RC): real-hardware bring-up") - builds clean, matches the
+in-browser sim byte-for-byte in behavior as far as the sim can exercise it, and as of
+2026-08-27 has actually been flashed and ridden on a real 860C (V13 board revision).
+850C/850C (2021) share this same source but haven't had their own hardware pass yet -
+don't merge or tag a release covering those two until they have. The motor `.hex` in
+`../motor/` doesn't have this caveat - it's been flashed and ridden on real hardware.
 
-If you want to build it yourself in the meantime:
+Rebuild via:
 
 ```sh
 cd firmwares/display/860C/860C_850C/src
@@ -113,5 +114,4 @@ make -f Makefile DISPLAY_VERSION="860C_V13_BOOTLOADER"   # or 860C_BOOTLOADER, 8
 ```
 
 Board pinout revision matters for 860C (see the warning in the `legacy/`
-section above) - confirm which V12/V13/plain your board is before flashing
-anything you build yourself, same as for the stock releases.
+section above) - confirm which V12/V13/plain your board is before flashing.

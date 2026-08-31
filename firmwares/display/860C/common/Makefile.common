@@ -11,13 +11,28 @@ VERSION_NUM := 25
 VERSION_STRING := 0.20.1C-5.2
 
 # This is the expected version of the motor firmware. Display will stop to work with correct TSDZ2 firmware version
+# 2026-08-28: PATCH was 52 - bumped alongside ebike_app.c's matching literal
+# for COMM_FRAME_TYPE_PERIODIC's new trailing telemetry bytes (wheel
+# perimeter, battery current max, target max power, battery capacity - see
+# that frame's comment). Keep these two in lockstep on any future wire
+# protocol change.
 TSDZ2_FIRMWARE_MAJOR := 0
 TSDZ2_FIRMWARE_MINOR := 21
-TSDZ2_FIRMWARE_PATCH := 52
+TSDZ2_FIRMWARE_PATCH := 53
 
 # Hand-maintained version of THIS display firmware, shown in the Technical menu
 DISPLAY_FIRMWARE_MAJOR := 1
 DISPLAY_FIRMWARE_MINOR := 0
 DISPLAY_FIRMWARE_PATCH := 0
 
-CFLAGS += -DVERSION_STRING=\"$(VERSION_STRING)\" -DTSDZ2_FIRMWARE_MAJOR=\"$(TSDZ2_FIRMWARE_MAJOR)\" -DTSDZ2_FIRMWARE_MINOR=\"$(TSDZ2_FIRMWARE_MINOR)\" -DTSDZ2_FIRMWARE_PATCH=\"$(TSDZ2_FIRMWARE_PATCH)\" -DDISPLAY_FIRMWARE_MAJOR=\"$(DISPLAY_FIRMWARE_MAJOR)\" -DDISPLAY_FIRMWARE_MINOR=\"$(DISPLAY_FIRMWARE_MINOR)\" -DDISPLAY_FIRMWARE_PATCH=\"$(DISPLAY_FIRMWARE_PATCH)\"
+# Auto-computed every build (no manual bump, so it can never be forgotten the
+# way a version number can) - shown on the boot screen in parens next to the
+# version string, purely so "did this actually reflash?" has a real answer
+# even when nobody remembered to bump DISPLAY_FIRMWARE_PATCH - see
+# real-hardware bring-up 2026-08-24, which burned real time on exactly that
+# doubt more than once. Minute granularity (not just date) specifically
+# because multiple rebuilds in one session/day is the common case during
+# active bring-up, not the exception.
+DISPLAY_BUILD_DATE := $(shell date +%Y%m%d.%H%M)
+
+CFLAGS += -DVERSION_STRING=\"$(VERSION_STRING)\" -DTSDZ2_FIRMWARE_MAJOR=\"$(TSDZ2_FIRMWARE_MAJOR)\" -DTSDZ2_FIRMWARE_MINOR=\"$(TSDZ2_FIRMWARE_MINOR)\" -DTSDZ2_FIRMWARE_PATCH=\"$(TSDZ2_FIRMWARE_PATCH)\" -DDISPLAY_FIRMWARE_MAJOR=\"$(DISPLAY_FIRMWARE_MAJOR)\" -DDISPLAY_FIRMWARE_MINOR=\"$(DISPLAY_FIRMWARE_MINOR)\" -DDISPLAY_FIRMWARE_PATCH=\"$(DISPLAY_FIRMWARE_PATCH)\" -DDISPLAY_BUILD_DATE=\"$(DISPLAY_BUILD_DATE)\"

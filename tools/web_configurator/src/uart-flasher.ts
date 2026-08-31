@@ -130,6 +130,11 @@ class SerialByteQueue {
     return null;
   }
 
+  /** Drops anything currently queued but not yet consumed - call right before writing so a stale byte from a previous attempt/block (or, on an adapter with any TX->RX echo, a byte from the outgoing block's own 2048-byte payload that happens to equal ACK_BYTE/NAK_BYTE) can never be misread as this write's response. See flashUartBin()'s block loop for why this matters more than it looks like it should. */
+  clear(): void {
+    this.queue.length = 0;
+  }
+
   async stop(): Promise<void> {
     this.stopped = true;
     try {
@@ -180,6 +185,7 @@ export async function flashUartBin(port: SerialPort, firmware: Uint8Array, onLog
     for (let i = 0; i < dataBlockCount; i++) {
       let acked = false;
       for (let attempt = 1; attempt <= BLOCK_RETRY_LIMIT && !acked; attempt++) {
+        reader.clear();
         await writeBlock(writer, blocks[i]);
         const response = await reader.waitForAnyByte([ACK_BYTE, NAK_BYTE], BLOCK_ACK_TIMEOUT_MS);
         if (response === ACK_BYTE) {

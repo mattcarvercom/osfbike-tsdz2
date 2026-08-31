@@ -243,6 +243,13 @@ typedef struct eeprom_data {
 	uint8_t ui8_extended_boost_ramp_down;
 	uint8_t ui8_auto_startup_assist_timeout;
 
+// osf.bike-only field, appended at the tail on purpose (compatible-change
+// convention, see this file's own comment above EEPROM_MIN_COMPAT_VERSION) -
+// trip memories -> "Auto pause". Default off: trip time counts continuously
+// from trip start to reset (elapsed on-bike time), matching "a trip is when
+// you get on the bike and when you get off" rather than moving-time-only.
+	uint8_t ui8_trip_auto_pause_enabled;
+
 // FIXME align to 32 bit value by end of structure and pack other fields
 } eeprom_data_t;
 
@@ -380,6 +387,7 @@ void eeprom_init_defaults(void);
 #define DEFAULT_VALUE_AUTO_STARTUP_ASSIST_TIME						10 // 1.0 second, max 5.0
 #define DEFAULT_VALUE_AUTO_STARTUP_ASSIST_TIMEOUT					5  // 0.5 second, max 2.0
 #define DEFAULT_VALUE_AUTO_STARTUP_ASSIST_THRESHOLD					10 // from 5 to 20
+#define DEFAULT_VALUE_TRIP_AUTO_PAUSE_ENABLED						0
 #define DEFAULT_VALUE_PASSWORD_ENABLED                              1	
 #define DEFAULT_VALUE_PASSWORD_CHANGED                              0
 #define DEFAULT_VALUE_RESET_PASSWORD	                            0

@@ -649,6 +649,80 @@ against a real 860C, because the user doesn't have one in hand yet. Test
 this for real as soon as it arrives, same "flash and confirm it boots"
 validation bar as everything else in this project.
 
+## WebUSB fallback for the UART flash path, for Android (added 2026-08-29)
+
+Android Chrome exposes `navigator.serial` (Chrome 126+), but that alone
+doesn't mean `connectUartAdapter()` above can actually open a real adapter
+there: Web Serial only attaches to a device the OS kernel has already turned
+into a tty via a bound driver, and Android ships no such driver for the
+vendor-specific chips these adapters use (Silicon Labs CP210x, WCH CH340,
+FTDI) - unlike desktop Linux/Windows/macOS, which all have one. The API
+being present is not proof the device will open; there's no capability check
+that distinguishes the two, so this isn't something to auto-detect and
+silently switch on - `webSerialAvailable()` still means exactly what it says
+("this browser has the API"), nothing more.
+
+`connectUartAdapterViaWebUsb()` (`uart-transport.ts`) is the real Android
+path: same model as `usb-transport.ts`'s ST-Link connection - talk to the
+raw, driver-unclaimed USB device directly via WebUSB, which needs nothing
+from the OS beyond USB host mode. Rather than reimplementing the CP210x/
+CH340/FTDI vendor wire protocols from scratch (each is genuinely
+undocumented-by-the-vendor, reverse-engineered-from-Linux-driver-source
+territory), this vendors `webusb-serial.js` from
+[Jason2866/WebSerial_ESPTool](https://github.com/Jason2866/WebSerial_ESPTool)
+(MIT; also published as the `tasmota-webserial-esptool` npm package) as a
+git submodule at `vendor/webserial-esptool` - a known-good implementation
+another project already built and hardware-verified for the identical
+problem (browser-based ESP flashing over USB-OTG on Android). It covers
+CP210x, CH340, FTDI, and a generic CDC/ACM fallback (the last one meaning a
+CDC-mode WCH CH342/CH343/CH344/CH9101/CH9102/etc adapter - a genuinely
+driverless, standard-class chip - would actually work over *plain* Web
+Serial on Android too, no fallback needed; recommend one of those for any
+new adapter purchase). Zero build step: it's already a browser-ready ES
+module, unlike every other `vendor/` submodule in this project which needs
+Emscripten - so there's no `wasm-*/build.sh` here, just a single dynamic
+`import()` in `connectUartAdapterViaWebUsb()`, which Vite code-splits into
+its own ~14KB chunk (confirmed via `npm run build`) so desktop users never
+download it.
+
+`webusb-serial-vendor.d.ts` declares only the four members actually called
+(`WebUSBSerial.requestPort()` static, `readable`/`writable`/`open()`/
+`close()`) - the vendored file ships no `.d.ts` and isn't a TS project, same
+"don't hand-maintain more than needed" precedent `webusb.d.ts` already sets
+for `wasm/build.sh`'s generated `*.mjs` output. `WebUSBSerial` isn't declared
+to *implement* `SerialPort` (`serial.d.ts`) anywhere - it's cast to it
+(`as unknown as SerialPort`) at the one call site, relying on the two being
+structurally compatible for the members `uart-flasher.ts`'s
+`flashUartBin()` and `motor-handshake.ts` actually touch (just
+`readable`/`writable`/`open()`/`close()`), which is why neither of those
+files needed any change.
+
+UI (`render/display-flash-page.ts`): the old single connect/disconnect
+toggle button became two explicit connect buttons - "Connect UART adapter…"
+(Web Serial, gated on `webSerialAvailable()`) and "Connect UART adapter via
+WebUSB (Android)…" (gated on `webUsbAvailable()`, imported from
+`usb-transport.ts` rather than duplicated) - shown side by side whenever
+both APIs exist (true on desktop Chrome too), collapsing to whichever one
+the browser actually supports. Disconnecting is transport-agnostic
+(`disconnectUartAdapter()` just calls `port.close()` either way) so there's
+still only one disconnect button once connected. The panel's top-level
+"not available" gate now only fires when *neither* API exists.
+
+**Verified**: `npm run preflight` passes clean (typecheck/lint/format, 54
+unit tests, 3 e2e scenarios - none of which exercise this new path directly,
+see e2e/run.ts's own header comment on why real WASM/WebUSB flows aren't
+covered there). Manually confirmed via a real dev server + Playwright: both
+connect buttons render (headless Chromium exposes both `navigator.serial`
+and `navigator.usb`), the informational Android/WebUSB subtitle renders,
+clicking "Connect UART adapter via WebUSB (Android)…" actually loads the
+vendored module and reaches real `navigator.usb.requestDevice()` (rejects
+with "No device selected" in this device-less sandbox, surfaced cleanly
+through the existing `state.uartConnectionError` UI, zero console errors).
+**Not yet verified against a real Android phone + adapter + display** - that
+real-hardware combination doesn't exist in this dev environment; test that
+combination for real before trusting it, same bar as the UART path itself
+above.
+
 **Built-in release catalog for 860C/850C added same day**, once it became
 clear the UART flow's raw-`.bin` requirement removed the old blocker (an
 ambiguous load address for a `.hex` file) that had left `releases/display/`

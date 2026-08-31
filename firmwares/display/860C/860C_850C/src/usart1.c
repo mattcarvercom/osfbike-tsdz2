@@ -21,6 +21,13 @@
 
 uint8_t ui8_rx_buffer[UART_NUMBER_DATA_BYTES_TO_RECEIVE];
 volatile uint8_t ui8_received_package_flag = 0;
+/* Total bytes received over USART1 since boot, regardless of framing/CRC
+ * validity. Exposed so the boot screen can show it as a "is anything
+ * actually arriving from the motor?" diagnostic while the handshake is
+ * stalled - a raw byte count climbing (with no valid ALIVE frame) points at
+ * a baud/protocol mismatch, while a count stuck at 0 points at wiring or a
+ * motor that isn't transmitting at all. */
+volatile uint32_t ui32_usart1_rx_byte_count = 0;
 
 void usart1_init(void)
 {
@@ -113,6 +120,7 @@ void USART1_IRQHandler()
   {
     // receive byte
     ui8_byte_received = (uint8_t) USART1->DR;
+    ui32_usart1_rx_byte_count++;
 
     switch (ui8_state_machine)
     {
@@ -126,6 +134,22 @@ void USART1_IRQHandler()
       break;
 
       case 1:
+        /* ui8_byte_received is the frame's own claimed length, used below
+         * (case 2) as an unchecked write count into ui8_rx[] - a real
+         * PERIODIC frame's LEN is exactly UART_NUMBER_DATA_BYTES_TO_RECEIVE-2
+         * (27, the largest frame this protocol ever sends), filling the
+         * buffer with zero slack. Any larger value can only mean a lost/
+         * misaligned byte upstream made this state machine mistake some
+         * mid-frame data byte for a fresh LEN - trusting it would run case
+         * 2's write past ui8_rx's end, corrupting whatever static memory
+         * follows it. Drop and resync on the next 0x43 instead of writing
+         * out of bounds - found 2026-08-22 bench-testing over a USB-UART
+         * adapter (real motor hardware never sends a malformed LEN, so
+         * this path was never exercised before). */
+        if (ui8_byte_received > (UART_NUMBER_DATA_BYTES_TO_RECEIVE - 2)) {
+          ui8_state_machine = 0;
+          break;
+        }
         ui8_rx[1] = ui8_byte_received;
         ui8_state_machine = 2;
       break;

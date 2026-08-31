@@ -10,9 +10,22 @@
  * names can be a bare filename or "legacy/<filename>" (see
  * firmware-manifest-plugin.ts), and plain encodeURIComponent() would also
  * escape that "/" (to "%2F"), turning a valid nested path into a request for
- * a literal, nonexistent "legacy%2F<filename>" file. */
+ * a literal, nonexistent "legacy%2F<filename>" file.
+ *
+ * Also un-escapes "+" back from encodeURIComponent()'s "%2B": this project's
+ * own release names use "+" for SemVer build metadata (e.g.
+ * "860C-1.0.0+V13.bootloader.bin", see releases/display/README.md), and
+ * Vite's dev server doesn't decode "%2B" back to "+" before resolving the
+ * path against the filesystem - it just falls through to the SPA index.html
+ * fallback with a 200 status instead of 404ing, which loadDisplayReleaseBinary()
+ * then silently accepts as if it were the real firmware. "+" needs no
+ * escaping in a URL path (only in a query string), so leaving it alone here
+ * is correct, not just a workaround for Vite's behavior. */
 function encodeReleasePath(name: string): string {
-  return name.split("/").map(encodeURIComponent).join("/");
+  return name
+    .split("/")
+    .map((segment) => encodeURIComponent(segment).replace(/%2B/g, "+"))
+    .join("/");
 }
 
 async function fetchManifest(url: string): Promise<string[]> {

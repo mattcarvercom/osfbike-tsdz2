@@ -149,6 +149,7 @@ void setWarning(ColorOp color, const char *str);
 
 #if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
 void auto_on_off_lights(void);
+void auto_adjust_brightness(void);
 #endif
 
 /// set to true if this boot was caused because we had a watchdog failure, used to show user the problem in the fault line

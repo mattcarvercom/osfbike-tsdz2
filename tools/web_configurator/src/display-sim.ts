@@ -56,6 +56,8 @@ export interface DisplaySim {
   setUnitsImperial(imperial: boolean): void;
   /** Reads back ui_vars.ui8_units_type - needed because the on-device config menu (Display -> Units) can also change it directly, not just this wrapper's own setUnitsImperial(). See sim_glue.c's sim_get_units_imperial() doc comment. */
   getUnitsImperial(): boolean;
+  /** Overwrites A service (Configurations -> Bike) to force the status-bar wrench icon on/off, regardless of whatever's currently set in that config menu. See sim_glue.c's sim_set_service_due() doc comment. */
+  setServiceDue(due: boolean): void;
 }
 
 export async function createDisplaySim(): Promise<DisplaySim> {
@@ -114,6 +116,9 @@ export async function createDisplaySim(): Promise<DisplaySim> {
     },
     getUnitsImperial() {
       return (Module.ccall("sim_get_units_imperial", "number", [], []) as number) !== 0;
+    },
+    setServiceDue(due: boolean) {
+      Module.ccall("sim_set_service_due", null, ["number"], [due ? 1 : 0]);
     },
   };
 }

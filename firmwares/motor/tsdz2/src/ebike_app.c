@@ -659,7 +659,26 @@ static void ebike_control_motor(void)
 #endif
 	
 	apply_rev_matching();
-    apply_speed_limit();
+	// apply_speed_limit() enforces the STREET/OFFROAD "Wheel max speed" cap
+	// unconditionally, regardless of riding mode - including CRUISE_MODE, so
+	// it was overriding the walk-assist cruise-control override's own
+	// per-level target speed (Walk assist & cruise control page's "Cruise
+	// target speed" fields) with whatever the display's current
+	// street/offroad limit happens to be. Real-hardware bring-up
+	// 2026-08-28: reported as PAS 3-5 override all cutting out around
+	// 20mph/32km/h on the bench regardless of their configured cruise
+	// target speed (TURBO's set to 99mph specifically to mean "no real
+	// cap, ramp to 100% duty and hold it") - confirmed this is
+	// STREET_MODE_SPEED_LIMIT/WHEEL_MAX_SPEED (whichever the display is
+	// currently reporting via byte[9]) silently capping it instead. The
+	// override is a deliberate "get home/emergency" feature the rider
+	// explicitly opts into per level (Walk assist & cruise control page's
+	// per-level override checkboxes) - skip the street-legal speed limiter
+	// while it's actively engaged, same as it already ignores rider
+	// pedaling/cadence gating other modes still respect.
+	if (!ui8_cruise_override_flag) {
+		apply_speed_limit();
+	}
 	#if SMOOTH_START_ENABLED
 	apply_smooth_start();
 	#endif
@@ -956,6 +975,19 @@ static void apply_smooth_start(void){
 	//ignore smooth start if walk assist controls the duty cycle
 	if(ui8_walk_assist_flag && ((uint16_t)ui8_walk_assist_duty_cycle_target > smooth_start_duty_cycle_target)){
 		smooth_start_duty_cycle_target = ui8_walk_assist_duty_cycle_target;
+	}
+	//ignore smooth start for the walk-assist cruise-override too - it drives the
+	//motor with zero pedal torque/cadence by design (dead-stop engagement via
+	//the walk-assist button), which this pedal-torque/cadence/wheel-speed-based
+	//limiter (all three blend sources clamp to their low end below ~8kph/15rpm/
+	//zero torque) has no way to distinguish from "not actually trying to move
+	//yet" - it computed a ~0 startup voltage target and clamped apply_cruise()'s
+	//real PID output straight back down to 0 every cycle, so nothing happened
+	//until real (hand-pedaled) wheel speed pushed the wheel-speed blend term
+	//open on its own. Real-hardware bring-up 2026-08-24: reported as "nothing
+	//happens until ~20mph, then sputters" on the TURBO cruise-override.
+	else if(ui8_cruise_override_flag && ((uint16_t)ui8_duty_cycle_target > smooth_start_duty_cycle_target)){
+		smooth_start_duty_cycle_target = ui8_duty_cycle_target;
 	}
 	//limit duty cycle for the smooth start
 	if (smooth_start_duty_cycle_target < (uint16_t)ui8_duty_cycle_target){
@@ -2685,8 +2717,26 @@ static void communications_process_packages(uint8_t ui8_frame_type)
 		// state machine is ready for the next init cycle
 		ui8_m_motor_init_status = MOTOR_INIT_STATUS_RESET;
 
-		// riding mode parameter (assist level power/torque/cadence/eMTB factor)
-		ui8_riding_mode_parameter = ui8_rx_buffer[3];
+		// mirrors uart_receive_package()'s own ui8_display_ready_flag = 1 (line
+		// ~3219) - ui8_display_ready_flag is a shared flag (declared once, used by
+		// both protocols) but was previously only ever SET from the DZ40-only
+		// function, which is never called in an 860C build
+		// (ENABLE_860C_LVGL_UART's main loop calls communications_controller()
+		// instead - see the #if/#else around line 530). That left it stuck at 0
+		// forever on 860C, which in turn kept the shared ui8_startup_flag (set
+		// from ui8_display_ready_flag by the power-on timer at line ~4636) stuck
+		// at 0 too - silently disabling every ui8_startup_flag-gated feature on
+		// 860C, including walk-assist cruise-override's activation gate just
+		// below. Real-hardware bring-up 2026-08-28: reported as cruise-override
+		// still not engaging on 860C (plain walk assist, which doesn't check this
+		// flag, works fine) even after the 2026-08-26 port above.
+		ui8_display_ready_flag = 1;
+
+		// ui8_rx_buffer[3] used to be relayed straight into ui8_riding_mode_parameter
+		// here (the display's own separately-configured per-level factor) - see the
+		// "set assist parameter" block below, where this is now computed from
+		// config.h's own table instead. Byte[3] itself is no longer read.
+		//
 		// hybrid torque parameter
 		ui8_hybrid_torque_parameter = ui8_rx_buffer[4];
 
@@ -2701,50 +2751,236 @@ static void communications_process_packages(uint8_t ui8_frame_type)
 			ui8_throttle_legal = (ui8_temp & 64) >> 6;
 			ui8_cruise_legal = (ui8_temp & 128) >> 7;
 
-			// The display sends the real 1-4 assist level in byte[4] whenever the
+			// The display sends its raw 1-5 PAS number in byte[4] whenever the
 			// base riding mode isn't hybrid (state.c:257-259) - hybrid mode reuses
 			// byte[4] for the hybrid torque parameter instead (already captured
 			// above as ui8_hybrid_torque_parameter), so it has no raw level to
-			// relay there; fall back to just OFF/ECO in that case. This keeps the
-			// existing "assist level == OFF" gating in ebike_control_motor working
-			// while also feeding apply_cruise()'s per-level speed table with the
-			// real selected level instead of always ECO.
+			// relay there; fall back to just OFF/ECO in that case.
+			//
+			// This must resolve to the same ASSIST MODE (ECO/TOUR/SPORT/TURBO),
+			// never a raw number, matching uart_receive_package()'s own
+			// ASSIST_PEDAL_LEVEL0-5 switch below - config.h's per-mode tables
+			// (POWER_ASSIST_LEVEL_*/etc.) are keyed by mode, not by which numbered
+			// PAS button was pressed, and the two displays' PAS numbering isn't
+			// even the same sequence: confirmed against real DZ40 hardware
+			// 2026-08-28, its 0-5 dial maps 1=BEFORE_ECO (ASSIST_LEVEL_5_MODE's
+			// half-power extra level, not a "level 1"), 2=ECO, 3=TOUR, 4=SPORT,
+			// 5=TURBO - i.e. raw 1 is the odd one out (DZ40's ASSIST_PEDAL_LEVEL5
+			// case) and raw 2-5 just shift down by one slot into the normal
+			// OFF/ECO/TOUR/SPORT/TURBO enum. Previously this passed byte[4]
+			// through almost raw (only clamped at TURBO), which put every 860C
+			// PAS number one full mode ahead of its DZ40 equivalent (e.g. "3" was
+			// SPORT here vs TOUR on DZ40) and never reproduced BEFORE_ECO's
+			// half-power step at all - reported as needing far more effort at
+			// low PAS numbers and cruise-override cutting out well below top
+			// speed even at the highest number.
 			if (!ui8_assist_level_flag) {
 				ui8_assist_level = OFF;
+				ui8_assist_level_5_flag = 0;
 			}
 			else if (ui8_rx_buffer[8] != HYBRID_ASSIST_MODE) {
+#if ASSIST_LEVEL_5_MODE
+				if (ui8_rx_buffer[4] <= 1U) {
+					// mirrors uart_receive_package()'s ASSIST_PEDAL_LEVEL5 case
+					// exactly, including AFTER_TURBO's alternate aliasing - see
+					// this block's comment above for why raw 1, not 5, is the
+					// special one on the 860C's own ascending 1-5 numbering
+#if ASSIST_LEVEL_5_MODE == AFTER_TURBO
+					ui8_assist_level = TURBO;
+#else // BEFORE_ECO
+					ui8_assist_level = ECO;
+#endif
+					ui8_assist_level_5_flag = 1;
+				}
+				else {
+					ui8_assist_level = ui8_min((uint8_t)(ui8_rx_buffer[4] - 1U), (uint8_t)TURBO);
+					ui8_assist_level_5_flag = 0;
+				}
+#else
 				ui8_assist_level = ui8_min(ui8_rx_buffer[4], (uint8_t)TURBO);
+				ui8_assist_level_5_flag = 0;
+#endif
 			}
 			else {
 				ui8_assist_level = ECO;
+				ui8_assist_level_5_flag = 0;
 			}
 
-			// battery max power target (street/offroad power limit)
-			ui8_target_battery_max_power_div25 = ui8_rx_buffer[6];
+			// battery max power target (street/offroad power limit) -
+			// display-selected (street vs off-road is this display's own
+			// EEPROM toggle, not this motor's), but never trust it past this
+			// motor's own real config.h ceiling. 2026-08-29: this protocol had
+			// no such clamp at all, unlike uart_receive_package()'s DZ40/
+			// VLCD5 path (ui32_adc_battery_power_max_x10_array, built from
+			// this exact same TARGET_MAX_BATTERY_POWER) - a bad/misconfigured
+			// display value applied directly with zero independent check.
+			// Real-hardware bring-up: a 1200W-configured motor still capped
+			// at ~450-500W on real hills because the display's own EEPROM
+			// street-mode toggle (persisted from before this fork's default
+			// changed, config defaults never touch already-provisioned
+			// EEPROM) was silently sending the display's much lower
+			// DEFAULT_STREET_MODE_POWER_LIMIT_DIV25 every cycle - this clamp
+			// doesn't fix that (the display's own toggle is still what
+			// selects which value to send), it only stops this motor from
+			// ever exceeding what it was actually configured/built for,
+			// regardless of what any display sends.
+			ui8_target_battery_max_power_div25 = ui8_min(ui8_rx_buffer[6],
+					(uint8_t)(TARGET_MAX_BATTERY_POWER / 25));
 
 			// walk assist parameter
 			ui8_walk_assist_parameter = ui8_rx_buffer[7];
 
-			// riding mode (with walk assist / cruise overrides)
-			if ((ui8_walk_assist) && (ui16_wheel_speed_x10 < WALK_ASSIST_THRESHOLD_SPEED_X10)
-			  && (m_configuration_variables.ui8_riding_mode != CRUISE_MODE)) {
-				m_configuration_variables.ui8_riding_mode = WALK_ASSIST_MODE;
+			// snapshot the assist level while the walk-assist button is not held -
+			// mirrors uart_receive_package()'s own snapshot (see
+			// ui8_assist_level_before_walk_button's declaration). Unlike DZ40/VLCD5,
+			// the 860C doesn't report a decremented level while the button is held
+			// (it's not shared with a level-down button on this display), so this is
+			// mostly just keeping the snapshot valid for CRUISE_OVERRIDE_ACTIVE_LEVEL
+			// and apply_cruise()'s per-level speed table below - defensive, not
+			// working around a known quirk the way the DZ40 snapshot is.
+			if (!ui8_walk_assist) {
+				ui8_assist_level_before_walk_button = ui8_assist_level;
 			}
-			else if ((ui8_cruise_enabled) && (ui16_wheel_speed_x10 > CRUISE_THRESHOLD_SPEED_X10)
-			  && (m_configuration_variables.ui8_riding_mode != WALK_ASSIST_MODE)) {
-				if (((ui8_cruise_legal) && (ui8_pedal_cadence_RPM)) || (!ui8_cruise_legal)) {
+
+			// riding mode (with walk assist / cruise / cruise-override)
+			//
+			// Cruise control override (this fork's own feature: holding the
+			// walk-assist button at a configured assist level temporarily borrows
+			// apply_cruise()'s real PID speed-hold - see main.h's
+			// CRUISE_OVERRIDE_ACTIVE_LEVEL and UNIVERSAL_FIRMWARE_PLAN.md) was only
+			// ever ported to the DZ40/VLCD5 protocol (uart_receive_package(), below)
+			// - this display's own periodic frame never engaged it at all. Ported
+			// here 2026-08-26, real-hardware bring-up: reported as walk-assist
+			// cruise-override "doesn't seem to work only on the 860C, even in PAS 5/
+			// TURBO". Compiled out entirely when no override level is configured,
+			// same as the DZ40 side (see main.h's #error guarding CRUISE_MODE_ENABLED
+			// at compile time).
+#if CRUISE_MODE_ENABLED
+			// Scoped (save/restore) rather than a blanket build-flag disable - see
+			// uart_receive_package()'s matching comment on its own copy of this
+			// warning-110 suppression for why. __SDCC-guarded (2026-08-26,
+			// CI's native --Werror build) - #pragma save/disable_warning/restore
+			// are SDCC-only directives; native gcc errored on
+			// -Werror=unknown-pragmas without the guard. __SDCC is SDCC's own
+			// always-defined predefined macro, so this is invisible to both the
+			// tests/ cffi harness and CI's native build, real for SDCC firmware
+			// builds.
+#ifdef __SDCC
+#pragma save
+#pragma disable_warning 110
+#endif
+			if ((ui8_walk_assist) && (ui8_startup_flag)
+			  && (CRUISE_OVERRIDE_ACTIVE_LEVEL(ui8_assist_level_before_walk_button))) {
+#ifdef __SDCC
+#pragma restore
+#endif
+				if (!ui8_cruise_override_flag) {
+					ui8_cruise_override_flag = 1;
+					ui8_riding_mode_temp = m_configuration_variables.ui8_riding_mode;
 					m_configuration_variables.ui8_riding_mode = CRUISE_MODE;
+					// force apply_cruise() to (re)initialize its PID and set a fresh
+					// speed target on this activation's very first poll - see the
+					// matching comment on the DZ40 side below for why this is needed.
+					ui8_cruise_PID_initialize = 1;
 				}
+				ui8_cruise_button_flag = 1;
+				ui8_walk_assist_flag = 0;
 			}
-			else {
-				m_configuration_variables.ui8_riding_mode = ui8_rx_buffer[8];
+			else
+#endif
+			{
+				if (ui8_cruise_override_flag) {
+					m_configuration_variables.ui8_riding_mode = ui8_riding_mode_temp;
+					ui8_cruise_override_flag = 0;
+				}
+				ui8_cruise_button_flag = 0;
+
+				if ((ui8_walk_assist) && (ui16_wheel_speed_x10 < WALK_ASSIST_THRESHOLD_SPEED_X10)
+				  && (m_configuration_variables.ui8_riding_mode != CRUISE_MODE)) {
+					m_configuration_variables.ui8_riding_mode = WALK_ASSIST_MODE;
+					// mirrors uart_receive_package()'s own bookkeeping - apply_smooth_start()'s
+					// walk-assist bypass (ebike_app.c) reads this flag directly, so without
+					// it 860C walk assist would inherit the same smooth-start startup bug
+					// bug #2 (2026-08-24) fixed for DZ40's cruise-override.
+					ui8_walk_assist_flag = 1;
+				}
+				else if ((ui8_cruise_enabled) && (ui16_wheel_speed_x10 > CRUISE_THRESHOLD_SPEED_X10)
+				  && (m_configuration_variables.ui8_riding_mode != WALK_ASSIST_MODE)) {
+					if (((ui8_cruise_legal) && (ui8_pedal_cadence_RPM)) || (!ui8_cruise_legal)) {
+						m_configuration_variables.ui8_riding_mode = CRUISE_MODE;
+					}
+					ui8_walk_assist_flag = 0;
+				}
+				else {
+					m_configuration_variables.ui8_riding_mode = ui8_rx_buffer[8];
+					ui8_walk_assist_flag = 0;
+				}
 			}
 			if (!ui8_walk_assist) {
 				ui8_walk_assist_speed_flag = 0;
 			}
 
-			// wheel max speed
-			ui8_wheel_speed_max = ui8_rx_buffer[9];
+			// set assist parameter (power/torque/cadence/eMTB/hybrid-power factor)
+			//
+			// Used to relay ui8_rx_buffer[3] straight through - the display's own,
+			// separately-configured per-level factor (its Config screen's "Level
+			// 1-9" fields, EEPROM-backed, defaults 25/50/75/.../250 on a 9-level
+			// scale). That meant identical motor firmware config.h settings produced
+			// very different real assist strength depending on which display was
+			// flashed with them, since the 860C's own factor table has nothing to do
+			// with config.h's POWER_ASSIST_LEVEL_1-4/TORQUE_ASSIST_LEVEL_1-4/etc.
+			// Real-hardware bring-up 2026-08-28: reported as needing dramatically
+			// more rider effort on 860C than DZ40 at the same PAS level with
+			// "virtually identical" settings between the two builds - by design,
+			// config.h should be the only place that tunes assist strength,
+			// regardless of which display gets flashed (see
+			// UNIVERSAL_FIRMWARE_PLAN.md). Now looks the value up from the same
+			// ui8_riding_mode_parameter_array config.h builds, exactly mirroring
+			// uart_receive_package()'s own lookup below (including the walk-assist/
+			// cruise-override pre-button-snapshot case, kept for consistency even
+			// though this display doesn't share DZ40's decremented-level-while-held
+			// quirk - see ui8_assist_level_before_walk_button's snapshot above).
+			if ((m_configuration_variables.ui8_riding_mode == WALK_ASSIST_MODE)
+			  ||((m_configuration_variables.ui8_riding_mode == CRUISE_MODE)&&(ui8_cruise_override_flag))) {
+				ui8_riding_mode_parameter = ui8_riding_mode_parameter_array[m_configuration_variables.ui8_riding_mode - 1][ui8_assist_level_before_walk_button];
+			}
+			else {
+				ui8_riding_mode_parameter = ui8_riding_mode_parameter_array[m_configuration_variables.ui8_riding_mode - 1][ui8_assist_level];
+			}
+#if ASSIST_LEVEL_5_MODE
+			// mirrors uart_receive_package()'s own copy of this scaling exactly -
+			// applies to whatever mode/level was just looked up above (POWER,
+			// TORQUE, CADENCE, WALK, CRUISE-override, all share this one
+			// assignment), not just the ECO/TURBO alias case handled above -
+			// added 2026-08-28 alongside porting the level-5 alias itself, see
+			// ui8_assist_level_5_flag's assignment above
+			if (ui8_assist_level_5_flag) {
+				ui8_riding_mode_parameter = (uint8_t)((uint16_t)((ui8_riding_mode_parameter * ASSIST_LEVEL_5_PERCENT) / 100U));
+			}
+#endif
+
+			// wheel max speed - unlike the power-cap field just above (which
+			// this display DOES let the rider configure, via its own EEPROM-
+			// backed street/offroad power fields), the 860C's "OSF Modern"
+			// theme has no config-screen field at all for this
+			// (configscreen.c's per-mode "Max speed" field only exists in the
+			// legacy SW102 menu branch) - so ui8_rx_buffer[9] was always
+			// whatever this display's EEPROM shipped with,
+			// DEFAULT_VALUE_WHEEL_MAX_SPEED = 25 km/h (a stock street-legal
+			// default), on every 860C this protocol has ever talked to.
+			// Real-hardware bring-up 2026-08-29: reported as assist cutting
+			// out at a fixed ~15-20mph regardless of assist level while
+			// pedaling normally, but NOT while holding walk-assist/cruise
+			// override (which skips apply_speed_limit() entirely, see its own
+			// comment above) - this is why: apply_speed_limit() was enforcing
+			// this display's silent 25 km/h default instead of this motor's
+			// own configured ceiling. Unlike the power-cap fix, a simple min()
+			// clamp against the motor's own ceiling doesn't fix a display
+			// value that's too LOW, so this now ignores the display's byte[9]
+			// entirely and looks up the motor's own config.h-configured
+			// value, exactly mirroring uart_receive_package()'s (DZ40/VLCD5)
+			// own lookup a few hundred lines below.
+			ui8_wheel_speed_max = ui8_wheel_speed_max_array[m_configuration_variables.ui8_street_mode_enabled];
 
 			// optional ADC function (2 bits: NOT_IN_USE/TEMPERATURE_CONTROL/THROTTLE_CONTROL)
 			ui8_optional_ADC_function = ui8_rx_buffer[10] & 3;
@@ -2854,7 +3090,44 @@ static void communications_process_packages(uint8_t ui8_frame_type)
 		// pedal torque increment (not tracked in this repo; send 0)
 		ui8_tx_buffer[26] = 0;
 
-		ui8_len += 24;
+		// 2026-08-28: real motor config, added so the display can show/use the
+		// motor's own configured values instead of its own locally-configured
+		// EEPROM guesses, which have no way to track config.h/motor-EEPROM
+		// changes and were confirmed drifting on real hardware (display
+		// showing 2100mm wheel perimeter and a 500W cap on a bike actually
+		// configured for 1627mm/1200W - see UNIVERSAL_FIRMWARE_PLAN.md and
+		// eeprom.h's DEFAULT_VALUE_MOTOR_POWER_LIMIT_DIV25/
+		// DEFAULT_VALUE_WH_X10_100_PERCENT comments on the display side for
+		// the two defaults this doesn't fully replace). Only ever read by the
+		// display now (motor's own COMM_FRAME_TYPE_CONFIGURATIONS handler
+		// above no longer accepts a wheel-perimeter/capacity push back from
+		// the display - see that case's own 2026-08-28 comment).
+
+		// wheel perimeter (mm) - m_configuration_variables.ui16_wheel_perimeter
+		// is itself loaded from this motor's own EEPROM at boot (eeprom.c),
+		// never from the display.
+		ui8_tx_buffer[27] = (uint8_t)(m_configuration_variables.ui16_wheel_perimeter & 0xff);
+		ui8_tx_buffer[28] = (uint8_t)(m_configuration_variables.ui16_wheel_perimeter >> 8);
+
+		// battery current max (A) - config.h's BATTERY_CURRENT_MAX, loaded via
+		// this motor's own EEPROM the same way.
+		ui8_tx_buffer[29] = m_configuration_variables.ui8_battery_current_max;
+
+		// target max battery power (W/25) - config.h's TARGET_MAX_BATTERY_POWER,
+		// a compile-time ceiling (same div25 scale already used for
+		// ui8_target_battery_max_power_div25 above, for wire-format
+		// consistency with the display's own equivalent field).
+		ui8_tx_buffer[30] = (uint8_t)(TARGET_MAX_BATTERY_POWER / 25);
+
+		// battery capacity (Wh) - config.h's TARGET_MAX_BATTERY_CAPACITY, the
+		// full nominal pack size (not ui16_actual_battery_capacity, which is
+		// this same value already derated by ACTUAL_BATTERY_CAPACITY_PERCENT
+		// for the motor's own internal Wh-remaining math - the display wants
+		// the real pack size to match what "Battery total Wh" represents).
+		ui8_tx_buffer[31] = (uint8_t)(TARGET_MAX_BATTERY_CAPACITY & 0xff);
+		ui8_tx_buffer[32] = (uint8_t)(TARGET_MAX_BATTERY_CAPACITY >> 8);
+
+		ui8_len += 30;
 		break;
 
 	  // set configurations
@@ -2867,124 +3140,33 @@ static void communications_process_packages(uint8_t ui8_frame_type)
 		ui8_m_motor_init_state = MOTOR_INIT_STATE_INIT_START_DELAY;
 		ui8_m_motor_init_status = MOTOR_INIT_STATUS_GOT_CONFIG;
 
-		// battery low voltage cut-off x10
-		m_configuration_variables.ui16_battery_low_voltage_cut_off_x10 = (((uint16_t) ui8_rx_buffer[4]) << 8) + ((uint16_t) ui8_rx_buffer[3]);
-		// set low voltage cutoff (10 bit ADC)
-		ui16_adc_voltage_cut_off = ((uint32_t) m_configuration_variables.ui16_battery_low_voltage_cut_off_x10 * 100U)
-			/ BATTERY_VOLTAGE_PER_10_BIT_ADC_STEP_X1000;
+		// 2026-08-28: this whole frame used to double as a bulk config push FROM
+		// the display, silently clobbering values the motor firmware (config.h,
+		// applied to m_configuration_variables/statics at ebike_app_init() from
+		// the motor's own EEPROM - see eeprom.c) had already set correctly on
+		// this exact boot, moments earlier. Confirmed on real hardware: 860C's
+		// own EEPROM defaults (wheel perimeter 2100mm, battery current 16A) are
+		// NOT what this bike is configured for, and every one of them has its
+        // own read-only field in the 860C config screen for a reason - the user
+		// wants the motor firmware to be the single source of truth (no local
+		// backup/share path for display EEPROM to compete with it), matching
+		// how ENABLE_WHEEL_MAX_SPEED_FROM_DISPLAY=0 and the FOC-angle-multiplier
+		// comment two lines below already treat this exact frame. So: keep the
+		// state-machine housekeeping above (the display does need the motor to
+		// go through init after this frame), keep the two genuinely-live runtime
+		// syncs below (lights_configuration, torque-sensor-calibration trigger),
+		// and drop every other assignment that used to overwrite a config.h-
+		// sourced value here. Nothing below this comment needs `ui8_temp`,
+		// `ui8_i`, or `ui16_temp` any more for this frame type.
 
-		// wheel perimeter
-		m_configuration_variables.ui16_wheel_perimeter = (((uint16_t) ui8_rx_buffer[6]) << 8) + ((uint16_t) ui8_rx_buffer[5]);
+		// bit3 of byte[8] (was ui8_torque_sensor_calibration_enabled) is a live
+		// display-triggered action (start/stop torque sensor calibration mode),
+		// not a static tunable - kept.
+		ui8_torque_sensor_calibration_enabled = (ui8_rx_buffer[8] & 8) >> 3;
 
-		// battery max current (Amps)
-		m_configuration_variables.ui8_battery_current_max = ui8_rx_buffer[7];
-		ui8_target_battery_max_power_div25_temp = 0; // force power-limit recompute next PERIODIC
-
-		ui8_temp = ui8_rx_buffer[8];
-		m_configuration_variables.ui8_startup_boost_enabled = ui8_temp & 1;
-		ui8_startup_boost_at_zero = (ui8_temp & 2) >> 1;
-		ui8_smooth_start_enabled = (ui8_temp & 4) >> 2;
-		ui8_torque_sensor_calibration_enabled = (ui8_temp & 8) >> 3;
-		m_configuration_variables.ui8_assist_with_error_enabled = (ui8_temp & 16) >> 4;
-		m_configuration_variables.ui8_assist_without_pedal_rotation_enabled = (ui8_temp & 32) >> 5;
-		// bit6 motor type -> FOC angle multiplier; this repo uses a compile-time
-		// FOC_ANGLE_MULTIPLIER (correct for the flashed hardware), so it is left
-		// unchanged rather than overridden by the received value.
-		ui8_eMTB_based_on_power = (ui8_temp & 128) >> 7;
-
-		// startup boost torque factor (stored >>1 on the wire) and cadence step
-		ui16_startup_boost_factor_array[0] = (uint16_t) ui8_rx_buffer[10] << 1;
-		ui8_startup_boost_cadence_step = ui8_rx_buffer[11];
-		for (ui8_i = 1; ui8_i < 120; ui8_i++) {
-			ui16_temp = (uint16_t)((ui16_startup_boost_factor_array[ui8_i - 1] * (uint16_t)ui8_startup_boost_cadence_step) >> 8);
-			ui16_startup_boost_factor_array[ui8_i] = ui16_startup_boost_factor_array[ui8_i - 1] - ui16_temp;
-		}
-
-		// motor overtemperature min/max limit (TMP36 adds 50 on the wire; this
-		// repo's temperature path handles the TMP36 offset itself)
-		if (ui8_optional_ADC_function == TEMPERATURE_CONTROL) {
-			ui8_motor_temperature_min_value_to_limit_array[TEMPERATURE_SENSOR_TYPE] = ui8_rx_buffer[12];
-			ui8_motor_temperature_max_value_to_limit_array[TEMPERATURE_SENSOR_TYPE] = ui8_rx_buffer[13];
-		}
-
-		// motor acceleration / deceleration adjustment (swap the source, not the logic)
-		ui8_duty_cycle_ramp_up_inverse_step_default = map_ui8((uint8_t)ui8_rx_buffer[14],
-				(uint8_t) 0,
-				(uint8_t) 100,
-				(uint8_t) PWM_DUTY_CYCLE_RAMP_UP_INVERSE_STEP_DEFAULT,
-				(uint8_t) PWM_DUTY_CYCLE_RAMP_UP_INVERSE_STEP_MIN);
-		ui8_duty_cycle_ramp_down_inverse_step_default = map_ui8((uint8_t)ui8_rx_buffer[15],
-				(uint8_t) 0,
-				(uint8_t) 100,
-				(uint8_t) PWM_DUTY_CYCLE_RAMP_DOWN_INVERSE_STEP_DEFAULT,
-				(uint8_t) PWM_DUTY_CYCLE_RAMP_DOWN_INVERSE_STEP_MIN);
-
-		// torque sensor calibration adjustments. This repo derives its torque
-		// calibration constants at compile time from config.h (see main.h
-		// ADC_TORQUE_SENSOR_* macros), so the received values are stored but not
-		// yet wired into the runtime torque math (revisit with the universal
-		// EEPROM-backed tuning work). The offset set (bytes 76/77) is wired to
-		// the live offset-min/max window used by the calibration check.
-		{
-			uint16_t ui16_offset_set = (((uint16_t) ui8_rx_buffer[77]) << 8) + ((uint16_t) ui8_rx_buffer[76]);
-			ui16_adc_pedal_torque_offset_min = ui16_offset_set - ADC_TORQUE_SENSOR_OFFSET_THRESHOLD;
-			ui16_adc_pedal_torque_offset_max = ui16_offset_set + ADC_TORQUE_SENSOR_OFFSET_THRESHOLD;
-		}
-
-		// smooth start counter set (stored; this repo's smooth start is the
-		// compile-time SMOOTH_START_ENABLED voltage-based smoother)
-		ui8_smooth_start_counter_set = ui8_rx_buffer[55];
-
-		// battery overcurrent delay
-		ui8_battery_overcurrent_delay = ui8_rx_buffer[57];
-		{
-			uint8_t ui8_display_eeprom_version = ui8_rx_buffer[56];
-			(void) ui8_display_eeprom_version; // sanity/compat value; not consumed
-		}
-
-		// startup boost auto mode
-		if (ui8_rx_buffer[58] & 1) {
-			ui8_startup_boost_at_zero = AUTO_BOOST;
-		}
-
-		// extended boost (stored; not consumed by this repo's assist paths)
-		ui8_extended_boost_multiplier = ui8_rx_buffer[60];
-		ui8_extended_boost_threshold = ui8_rx_buffer[61];
-		ui8_extended_boost_ramp_down = 5U - ui8_extended_boost_multiplier + ui8_rx_buffer[63];
-
-		// torque modes based on power, reference voltage
-		ui16_power_based_reference_voltage_x10 = (uint16_t)ui8_rx_buffer[62] * 10;
-
-		// pedal torque range (stored; this repo computes it at compile time)
-		{
-			uint16_t ui16_range = (((uint16_t) ui8_rx_buffer[79]) << 8) + ((uint16_t) ui8_rx_buffer[78]);
-			if (ui16_range > 0U) {
-				ui16_temp = (ADC_TORQUE_SENSOR_RANGE_TARGET * 50) / ui16_range;
-			}
-			else {
-				ui16_temp = 0;
-			}
-		}
-
-		ui8_temp = ui8_rx_buffer[80];
-		// bit0 cadence_fast_stop not used
-		ui8_field_weakening_feature_enabled = (ui8_temp & 2) >> 1;
-		// bit2 coast brake -> this repo gates coaster brake at compile time
-		ui8_torque_modes_based_on_power = (ui8_temp & 8) >> 3;
-		ui8_extended_boost_enabled = (ui8_temp & 16) >> 4;
-
-		// coast brake threshold
-		ui8_coaster_brake_torque_threshold = ui8_rx_buffer[81];
-
-		// lights configuration
+		// lights configuration - live runtime state (which of the 3 configured
+		// light patterns is currently active), not a tunable - kept.
 		m_configuration_variables.ui8_lights_configuration = ui8_rx_buffer[82];
-
-		// pedal torque per 10-bit ADC step x100
-		ui8_pedal_torque_per_10_bit_ADC_step_x100 = ui8_rx_buffer[83];
-		ui8_pedal_torque_per_10_bit_ADC_step_x100_array[TORQUE_STEP_DEFAULT] = ui8_rx_buffer[83];
-
-		// torque sensor ADC threshold (assist without pedal rotation threshold)
-		ui8_assist_without_pedal_rotation_threshold = ui8_rx_buffer[84];
 
 		break;
 
@@ -2993,7 +3175,15 @@ static void communications_process_packages(uint8_t ui8_frame_type)
 		ui8_tx_buffer[3] = m_system_state_get();
 		ui8_tx_buffer[4] = 0;  // major
 		ui8_tx_buffer[5] = 21; // minor
-		ui8_tx_buffer[6] = 52; // patch (must match firmwares/display/860C build)
+		// 2026-08-28: was 52 - bumped because COMM_FRAME_TYPE_PERIODIC's wire
+		// format changed (6 new trailing bytes, UART_TX_BUFFER_LEN 29->35 -
+		// see that frame's own comment above). state.c gates its periodic
+		// parsing of those new bytes on this value so an old display talking
+		// to this new motor (or vice versa) shows garbage/zero telemetry
+		// instead of silently trusting bytes the other side never agreed on.
+		// Must match firmwares/display/860C build's TSDZ2_FIRMWARE_PATCH
+		// (common/Makefile.common).
+		ui8_tx_buffer[6] = 53; // patch
 		ui8_len += 4;
 		break;
 
@@ -3510,6 +3700,27 @@ static void uart_receive_package(void)
 			// torque sensor calibration *********************************
 			// if torque sensor calibration is enabled (within 25 seconds of power on)
 			// or if the display supports walk assist at OFF level (XH18)
+			//
+			// Both entry points below (OFF-level and ECO-level) were unconditionally
+			// compiled in for every display, despite the comment above saying the
+			// OFF-level one is specifically an XH18 accommodation (that display
+			// apparently has no other way to reach calibration). On VLCD5/DZ40 -
+			// which has no menu system to give any feedback once inside
+			// TORQUE_SENSOR_CALIBRATION_MODE, just a 2-digit LED, and which uses the
+			// same walk-assist button for actual walk assist at both OFF and ECO
+			// (PAS 1/BEFORE_ECO and PAS 2/ECO both resolve to ui8_assist_level ==
+			// ECO - see ASSIST_LEVEL_5_MODE) - this meant holding the walk-assist
+			// button at PAS0-2 silently dropped into calibration mode instead of
+			// walk assist, with zero indication, stuck there until the assist level
+			// was raised (torque_sensor_calibration()'s only exit condition) rather
+			// than on button release. Real hardware bring-up 2026-08-24: reported as
+			// the speed display permanently stuck on "12"/"13" at PAS0/OFF (wheel
+			// not even spinning) and very likely the same root cause behind the
+			// original PAS1/PAS2 walk-assist "12" reports earlier in this same
+			// bring-up session. Entirely compiled out here (no #else) rather than
+			// scoped to ENABLE_XH18, since this display has no use for either entry
+			// point - control just falls through to the walk-assist branch below.
+#if ENABLE_XH18
 			else if ((ui8_walk_assist_button_pressed)&&(ui8_startup_flag)
 			  &&(m_configuration_variables.ui8_set_parameter_enabled)
 			  &&(((ui8_torque_sensor_calibration_enabled)&&(ui8_assist_level == ECO))
@@ -3517,7 +3728,7 @@ static void uart_receive_package(void)
 					ui8_torque_sensor_calibration_flag = 1;
 					// starting torque sensor calibration procedure 1
 					ui8_torque_sensor_calibration_flag_1 = 1;
-				
+
 					// for recovery actual riding mode
 					if (m_configuration_variables.ui8_riding_mode != TORQUE_SENSOR_CALIBRATION_MODE) {
 						ui8_riding_mode_temp = m_configuration_variables.ui8_riding_mode;
@@ -3525,6 +3736,7 @@ static void uart_receive_package(void)
 					// special riding mode (torque sensor calibration)
 					m_configuration_variables.ui8_riding_mode = TORQUE_SENSOR_CALIBRATION_MODE;
 			}
+#endif
 			
 			// cruise mode ***********************************************
 			// excludes the walk-assist override case (any level): that path
@@ -3545,10 +3757,20 @@ static void uart_receive_package(void)
 			}
 			
 			// startup assist mode and walk assist mode ******************
+			// The "yield to torque-sensor calibration" clause below only makes
+			// sense paired with that branch above still existing - for non-XH18
+			// displays it's now compiled out entirely (see the comment above), so
+			// this would otherwise block walk assist completely for the first
+			// ~25s after power-on (calibration_enabled/set_parameter_enabled both
+			// default true) with nothing left to hand off to. Dropped for non-XH18.
+#if ENABLE_XH18
 			else if ((ui8_assist_level != OFF)
 			  &&((!ui8_torque_sensor_calibration_enabled)
 				||(!m_configuration_variables.ui8_set_parameter_enabled))) {
-				
+#else
+			else if (ui8_assist_level != OFF) {
+#endif
+
 				// startup assist mode
 				if ((m_configuration_variables.ui8_startup_assist_enabled)
 				  &&(ui8_walk_assist_button_pressed)&&(ui8_startup_flag)
@@ -3572,8 +3794,28 @@ static void uart_receive_package(void)
 				// --Werror turns that into a hard build error. See main.h's
 				// #error guarding CRUISE_MODE_ENABLED at compile time.
 #if CRUISE_MODE_ENABLED
+				// Scoped (save/restore) rather than a blanket build-flag disable, so
+				// this doesn't also swallow a genuinely different warning 110 elsewhere
+				// in this file later. Chosen over restructuring the condition itself -
+				// two earlier attempts at that were reverted, one of which broke the
+				// tests/ pycparser harness - this changes zero generated code (SDCC
+				// warning flags don't affect codegen) and zero C semantics, only which
+				// diagnostics get printed for this one already-correct block.
+				// __SDCC-guarded (2026-08-26) - the un-guarded pragma still broke a
+				// *different* test path than the one the comment above references:
+				// CI's native --Werror build errored on -Werror=unknown-pragmas (gcc
+				// doesn't know SDCC's #pragma syntax at all). __SDCC is SDCC's own
+				// always-defined predefined macro, so guarding on it makes this
+				// invisible to gcc and pycparser both, real only for SDCC.
+#ifdef __SDCC
+#pragma save
+#pragma disable_warning 110
+#endif
 				if ((ui8_walk_assist_button_pressed)&&(ui8_startup_flag)&&(!ui8_startup_assist_flag)
 				  &&(CRUISE_OVERRIDE_ACTIVE_LEVEL(ui8_assist_level_before_walk_button))) {
+#ifdef __SDCC
+#pragma restore
+#endif
 					if (!ui8_cruise_override_flag) {
 						// set cruise override flag
 						ui8_cruise_override_flag = 1;
@@ -4333,8 +4575,21 @@ static void calc_oem_wheel_speed(void) {
 		// oem wheel speed (wheel turning time) ms/2 - speed conversion for different perimeter
 		// ui8_oem_wheel_diameter is in inches.
 		// Conversion inche to mm perimeter = 25.4 * 3.1415 = 79.8 = 80
-		ui16_oem_wheel_speed_time = (uint16_t)((uint32_t)(uint16_t)(ui8_oem_wheel_diameter * 80U * 10U) * ui16_wheel_speed_sensor_ticks 
-			/ ((uint32_t)m_configuration_variables.ui16_wheel_perimeter * OEM_WHEEL_SPEED_DIVISOR)); // OEM_WHEEL_SPEED_DIVISOR is x10
+		//
+		// At true standstill ui16_wheel_speed_sensor_ticks saturates at
+		// WHEEL_SPEED_COUNTER_MAX, but that still divides out to some small
+		// finite "time" here (never exactly 0), which the display then renders
+		// as its minimum nonzero speed instead of 0 - unlike calc_wheel_speed()
+		// (the km/h path), which already special-cases this. Mirror that here
+		// rather than relying on the ENABLE_ODOMETER_COMPENSATION-only reset
+		// further down, which doesn't cover this build's default config.
+		if (ui16_wheel_speed_sensor_ticks < WHEEL_SPEED_COUNTER_MAX) {
+			ui16_oem_wheel_speed_time = (uint16_t)((uint32_t)(uint16_t)(ui8_oem_wheel_diameter * 80U * 10U) * ui16_wheel_speed_sensor_ticks
+				/ ((uint32_t)m_configuration_variables.ui16_wheel_perimeter * OEM_WHEEL_SPEED_DIVISOR)); // OEM_WHEEL_SPEED_DIVISOR is x10
+		}
+		else {
+			ui16_oem_wheel_speed_time = 0;
+		}
 	}
 	
 #if ENABLE_ODOMETER_COMPENSATION

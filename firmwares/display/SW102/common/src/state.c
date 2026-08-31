@@ -792,9 +792,10 @@ static void rt_calc_trips(void) {
     ui8_3s_timer_counter = 0;
   }
 
-  // at 1s rate : update all trip time variables if wheel is turning
+  // at 1s rate : update all trip time variables, unless "Auto pause" is
+  // enabled and the wheel isn't turning
   if (++ui8_1s_timer_counter >= 10) {
-    if (rt_vars.ui16_wheel_speed_x10 > 0) {
+    if (!ui_vars.ui8_trip_auto_pause_enabled || rt_vars.ui16_wheel_speed_x10 > 0) {
       ui_vars.ui32_trip_a_time += 1;
       ui_vars.ui32_trip_b_time += 1;
     }

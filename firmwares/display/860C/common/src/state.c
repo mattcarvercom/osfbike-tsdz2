@@ -31,12 +31,36 @@
 
 //#define DEBUG_TSDZ2_FIRMWARE
 
+// Max plausible wheel-tick delta between two consecutive FRAME_TYPE_PERIODIC
+// replies (100ms apart, real motor cadence) - generously covers speeds well
+// past 250 km/h regardless of configured wheel size, while still catching
+// the multi-thousand-tick jump a single corrupted mid/high byte in this
+// 24-bit counter would otherwise produce. Exists because this specific
+// field is the one PERIODIC value with a permanent, EEPROM-persisted
+// consequence (rt_calc_odometer() adds it straight to the odometer/trip
+// distances) rather than a per-frame display value that a later good frame
+// silently overwrites - see usart1.c's 2026-08-22 bounds-check comment for
+// why a bench USB-UART adapter can occasionally deliver a garbled-but-CRC-
+// valid frame real motor hardware structurally never would. Guards
+// communications()'s FRAME_TYPE_PERIODIC case, below.
+#define MAX_PLAUSIBLE_WHEEL_TICK_DELTA_PER_FRAME 50
+
 typedef enum {
   FRAME_TYPE_ALIVE = 0,
   FRAME_TYPE_STATUS = 1,
   FRAME_TYPE_PERIODIC = 2,
   FRAME_TYPE_CONFIGURATIONS = 3,
   FRAME_TYPE_FIRMWARE_VERSION = 4,
+  // Not part of the real motor<->display protocol - a real motor never
+  // sends this type. Bench/dev only: lets the web configurator's motor
+  // emulator (tools/web_configurator/src/motor-handshake.ts) force a full
+  // EEPROM reset over the same UART link already used for bench telemetry,
+  // for when the config menu's own "reset to defaults" field is
+  // unreachable (stuck boot, dead buttons, etc.) - see communications()'s
+  // handling right after ui8_frame is parsed, unconditional on
+  // g_motor_init_state so it works no matter what state the handshake is
+  // stuck in.
+  FRAME_TYPE_BENCH_EEPROM_WIPE = 0x7e,
 } frame_type_t;
 
 static uint8_t ui8_pedal_torque_ADC_step_adv_calc_x100 = 0;
@@ -86,10 +110,15 @@ rt_vars_t* get_rt_vars(void) {
 
 /// Set correct backlight brightness for current headlight state
 void set_lcd_backlight() {
-	lcd_set_backlight_intensity(
-			ui_vars.ui8_lights ?
-					ui_vars.ui8_lcd_backlight_on_brightness :
-					ui_vars.ui8_lcd_backlight_off_brightness);
+	uint8_t ui8_brightness =
+		ui_vars.ui8_lights ?
+				ui_vars.ui8_lcd_backlight_on_brightness :
+				ui_vars.ui8_lcd_backlight_off_brightness;
+
+	lcd_set_backlight_intensity(ui8_brightness);
+#if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
+	ui_vars.ui8_current_brightness_percent = ui8_brightness;
+#endif
 }
 /*
 static uint16_t fake(uint16_t minv, uint16_t maxv) {
@@ -689,7 +718,13 @@ void rt_calc_wh(void) {
 			// calc trip Wh (single trip now - trip B removed for 860C/850C)
 			ui32_wh_x10_since_power_on = ui32_temp;
 			ui_vars.ui32_wh_x10_trip_a = rt_vars.ui32_wh_x10_trip_a_offset + ui32_temp - ui32_wh_x10_reset_trip_a;
-			ui32_trip_a_wh_km_value_x100 = (ui_vars.ui32_wh_x10_trip_a * 100) / rt_vars.ui32_trip_a_distance_x10;
+			// avoid zero division: trip distance is genuinely 0 on a fresh boot
+			// (DEFAULT_VALUE_TRIP_DISTANCE) and after any trip reset
+			// (mainscreen.c's ui8_trip_a_reset path), both of which this function
+			// runs through unconditionally every 1s once called - same guard style
+			// already used for trip avg speed a few lines below (ui16_trip_a_avg_speed_x10).
+			ui32_trip_a_wh_km_value_x100 = rt_vars.ui32_trip_a_distance_x10 ?
+				(ui_vars.ui32_wh_x10_trip_a * 100) / rt_vars.ui32_trip_a_distance_x10 : 0;
 #endif
 		}
 	}
@@ -702,7 +737,7 @@ void reset_wh(void) {
   m_reset_wh_flag = false;
 }
 
-static void rt_calc_odometer(void) {
+void rt_calc_odometer(void) {
 	static uint8_t ui8_1s_timer_counter = 0;
 	static uint32_t ui32_remainder = 0;
 	static uint8_t ui8_01km = 0;
@@ -713,10 +748,26 @@ static void rt_calc_odometer(void) {
 	  && (ui8_motorErrorsIndex != ERROR_NOT_INIT)) {
 		ui8_1s_timer_counter = 0;
 
-		// calculate how many revolutions since last reset and convert to distance traveled
-		uint32_t ui32_temp = (ui_vars.ui32_wheel_speed_sensor_tick_counter
-				- ui_vars.ui32_wheel_speed_sensor_tick_counter_offset)
-				* ((uint32_t) rt_vars.ui16_wheel_perimeter) + ui32_remainder;
+		// Distance covered in the last 1s, integrated directly from the
+		// real-time wheel speed telemetry (rt_vars.ui16_wheel_speed_x10,
+		// km/h x10 - FRAME_TYPE_PERIODIC, already used correctly everywhere
+		// else on this display, e.g. the visible speedometer).
+		//
+		// 2026-08-29: this used to diff ui_vars.ui32_wheel_speed_sensor_tick_counter
+		// (periodic-frame bytes[21..23]) against a saved offset, treating it
+		// as a monotonically-increasing wheel-revolution pulse count. It
+		// isn't one: that field is fed straight from the motor's
+		// ui16_wheel_speed_sensor_ticks (ebike_app.c), which is the raw
+		// timer PERIOD between wheel-sensor pulses - it resets every
+		// revolution and gets SMALLER as speed increases, so diffing it
+		// like a running counter mostly just tracked instantaneous speed
+		// noise, not accumulated distance. Real-hardware bring-up: odometer
+		// and trip distance never meaningfully advanced on a real ride, and
+		// neither did the Wh/km 1km-milestone flag below (ui8_01km_flag) -
+		// same root cause, both fixed by no longer depending on that field
+		// for distance at all.
+		uint32_t ui32_temp = ((uint32_t) rt_vars.ui16_wheel_speed_x10 * 27778UL) / 1000UL
+				+ ui32_remainder;
 
 		// if traveled distance is more than 100 meters update all distance variables and reset
 		if (ui32_temp >= 100000) { // 100000 -> 100000 mm -> 0.1 km
@@ -730,10 +781,7 @@ static void rt_calc_odometer(void) {
 			ui8_calc_avg_speed_flag = 1;
 			ui8_01km_flag = 1;
 			ui32_remainder = ui32_temp - 100000;
-			
-			// reset the always incrementing value (up to motor controller power reset) by setting the offset to current value
-			ui_vars.ui32_wheel_speed_sensor_tick_counter_offset =
-					ui_vars.ui32_wheel_speed_sensor_tick_counter;
+
 			#ifndef SW102
 			// service distance km
 			ui8_01km += 1;
@@ -747,6 +795,13 @@ static void rt_calc_odometer(void) {
 				}
 			}
 			#endif
+		} else {
+			// carry the leftover sub-100m distance forward - unlike the old
+			// tick-diff approach (which re-derived the full distance since a
+			// saved offset every call), this integrates incrementally call-
+			// to-call, so the remainder must be saved on every call, not
+			// just the ones that cross a milestone.
+			ui32_remainder = ui32_temp;
 		}
 	}
 
@@ -780,7 +835,7 @@ static void rt_calc_odometer(void) {
   }
 }
 
-static void rt_calc_trips(void) {
+void rt_calc_trips(void) {
 	static uint8_t ui8_1s_timer_counter = 0;
 	static uint8_t ui8_3s_timer_counter = 0;
 	
@@ -812,9 +867,10 @@ static void rt_calc_trips(void) {
     ui8_3s_timer_counter = 0;
   }
 
-  // at 1s rate : update all trip time variables if wheel is turning
+  // at 1s rate : update all trip time variables, unless "Auto pause" is
+  // enabled and the wheel isn't turning
   if (++ui8_1s_timer_counter >= 10) {
-    if (rt_vars.ui16_wheel_speed_x10 > 0) {
+    if (!ui_vars.ui8_trip_auto_pause_enabled || rt_vars.ui16_wheel_speed_x10 > 0) {
       ui_vars.ui32_trip_a_time += 1;
 #ifdef SW102
       ui_vars.ui32_trip_b_time += 1;
@@ -907,10 +963,31 @@ void rt_calc_battery_soc(void) {
 	ui8_g_battery_soc = (uint8_t) (100 - ui32_temp);
 	
 	if(!ui8_waiting_voltage_ready_counter) {
-		ui8_battery_soc_index =  (uint8_t) ((uint16_t) (100
-			- ((ui_vars.ui16_battery_voltage_soc_x10 - ui_vars.ui16_battery_low_voltage_cut_off_x10) * 100)
-			/ (ui_vars.ui16_battery_voltage_reset_wh_counter_x10 - ui_vars.ui16_battery_low_voltage_cut_off_x10)));
-		
+		// 2026-08-28: was plain uint16_t arithmetic - the moment live battery
+		// voltage sags under load (or the pack just genuinely depletes) below
+		// ui16_battery_low_voltage_cut_off_x10, this subtraction underflows,
+		// and the result - cast straight to uint8_t with no bounds check -
+		// indexes ui8_battery_soc_used[100] (mainscreen.c) out of bounds.
+		// Real-hardware bring-up: "Used Wh" garbage-jumping toward its ~9990
+		// ceiling mid-ride traced to this - the resulting garbage index feeds
+		// BatterySOCReset()'s wh_x10_offset computation below (via the
+		// auto-reset trigger further down this function). Do the subtraction
+		// in signed 32-bit and clamp the index into [0,99] so a voltage sag
+		// (or a misconfigured reset-voltage <= cutoff-voltage) degrades to
+		// "treat as fully used" instead of reading garbage memory.
+		int32_t ui32_soc_num = (int32_t) ui_vars.ui16_battery_voltage_soc_x10
+			- (int32_t) ui_vars.ui16_battery_low_voltage_cut_off_x10;
+		int32_t ui32_soc_den = (int32_t) ui_vars.ui16_battery_voltage_reset_wh_counter_x10
+			- (int32_t) ui_vars.ui16_battery_low_voltage_cut_off_x10;
+		int32_t ui32_soc_index = (ui32_soc_den > 0)
+			? (100 - (ui32_soc_num * 100) / ui32_soc_den)
+			: 99;
+		if (ui32_soc_index < 0)
+			ui32_soc_index = 0;
+		else if (ui32_soc_index > 99)
+			ui32_soc_index = 99;
+		ui8_battery_soc_index = (uint8_t) ui32_soc_index;
+
 		if(ui_vars.ui8_battery_soc_percent_calculation == SOC_CALC_AUTO) {
 			if(!ui8_battery_soc_init_flag) {
 				//uint8_t ui8_battery_soc_auto_reset_low = ui_vars.ui8_battery_soc_auto_reset;
@@ -974,6 +1051,10 @@ void copy_rt_to_ui_vars(void) {
 	ui_vars.ui8_motor_temperature = rt_vars.ui8_motor_temperature;
 //	ui_vars.ui32_wheel_speed_sensor_tick_counter =
 //			rt_vars.ui32_wheel_speed_sensor_tick_counter;
+	ui_vars.ui16_motor_wheel_perimeter = rt_vars.ui16_motor_wheel_perimeter;
+	ui_vars.ui8_motor_battery_current_max = rt_vars.ui8_motor_battery_current_max;
+	ui_vars.ui16_motor_target_max_power = rt_vars.ui16_motor_target_max_power;
+	ui_vars.ui16_motor_battery_capacity = rt_vars.ui16_motor_battery_capacity;
 	ui_vars.ui16_battery_voltage_filtered_x10 =
 			rt_vars.ui16_battery_voltage_filtered_x10;
 	ui_vars.ui16_battery_current_filtered_x5 =
@@ -1374,6 +1455,23 @@ void communications(void) {
       // now process rx data
       ui8_frame = (frame_type_t) p_rx_buffer[2];
 
+      // Bench-only EEPROM wipe (see FRAME_TYPE_BENCH_EEPROM_WIPE's own doc
+      // comment) - checked before the g_motor_init_state switch below so it
+      // works regardless of handshake state, and gated on a 4-byte magic
+      // payload (not just the frame type) so nothing short of a deliberate
+      // bench command can ever trigger it. Reuses the exact same
+      // confirm+flag pair the config menu's own "reset to defaults" field
+      // sets (mainscreen.c's DisplayResetToDefaults(), polled every
+      // screen_clock() tick) rather than calling eeprom_init_defaults()
+      // directly, so this gets the same odometer/Wh/service-distance
+      // preservation that path already has, for free.
+      if (ui8_frame == FRAME_TYPE_BENCH_EEPROM_WIPE &&
+          p_rx_buffer[3] == 'W' && p_rx_buffer[4] == 'I' &&
+          p_rx_buffer[5] == 'P' && p_rx_buffer[6] == 'E') {
+        ui8_g_configuration_display_reset_to_defaults = 1;
+        ui_vars.ui8_confirm_default_reset = 1;
+      }
+
       switch (g_motor_init_state) {
         case MOTOR_INIT_WAIT_MOTOR_ALIVE:
           if (ui8_frame == FRAME_TYPE_ALIVE)
@@ -1476,7 +1574,15 @@ void communications(void) {
 
             uint32_t ui32_wheel_speed_sensor_tick_temp = ((uint32_t) p_rx_buffer[21]) |
                 (((uint32_t) p_rx_buffer[22]) << 8) | (((uint32_t) p_rx_buffer[23]) << 16);
-            ui_vars.ui32_wheel_speed_sensor_tick_counter = ui32_wheel_speed_sensor_tick_temp;
+            // A backward jump is a legitimate motor-controller power-cycle
+            // (the counter free-runs from 0 again) - only reject an
+            // implausibly large forward jump, which a real wheel can never
+            // produce in one 100ms frame. See this constant's own comment.
+            if (ui32_wheel_speed_sensor_tick_temp < ui_vars.ui32_wheel_speed_sensor_tick_counter ||
+                (ui32_wheel_speed_sensor_tick_temp - ui_vars.ui32_wheel_speed_sensor_tick_counter)
+                    <= MAX_PLAUSIBLE_WHEEL_TICK_DELTA_PER_FRAME) {
+              ui_vars.ui32_wheel_speed_sensor_tick_counter = ui32_wheel_speed_sensor_tick_temp;
+            }
 			
 			// calculate pedal torque ADC step for human power
 			uint16_t ui16_adc_pedal_torque_range_target_max = ADC_TORQUE_SENSOR_RANGE_TARGET_MIN
@@ -1514,7 +1620,33 @@ void communications(void) {
 				//rt_vars.ui8_extended_boost_assist_increment = 0;
 				rt_vars.ui8_adc_pedal_torque_increment = 0;
 			}
-			
+
+			// 2026-08-28: motor's own real config, added so this display can
+			// show/use it directly instead of maintaining a separate,
+			// independently-configured local guess - see ebike_app.c's
+			// matching comment on the tx side for the wire layout and why.
+			// Gated on patch >= 53 (same pattern as the >= 52 check just
+			// above) since a patch 43-52 motor's periodic frame is shorter
+			// and never sends these bytes at all - p_rx_buffer[27..32] would
+			// just be whatever this display's own RX scratch buffer happened
+			// to hold from an earlier, longer frame. The coarser major/minor/
+			// patch>=43 check (MOTOR_INIT_GOT_MOTOR_FIRMWARE_VERSION, above
+			// in this file) already refuses to boot at all on a real
+			// incompatibility - this is only about a same-boot-gen motor
+			// that predates this one field addition.
+			if (g_tsdz2_firmware_version.patch >= 53) {
+				rt_vars.ui16_motor_wheel_perimeter = ((uint16_t) p_rx_buffer[27]) | ((uint16_t) p_rx_buffer[28] << 8);
+				rt_vars.ui8_motor_battery_current_max = p_rx_buffer[29];
+				rt_vars.ui16_motor_target_max_power = (uint16_t) p_rx_buffer[30] * 25;
+				rt_vars.ui16_motor_battery_capacity = ((uint16_t) p_rx_buffer[31]) | ((uint16_t) p_rx_buffer[32] << 8);
+			}
+			else {
+				rt_vars.ui16_motor_wheel_perimeter = 0;
+				rt_vars.ui8_motor_battery_current_max = 0;
+				rt_vars.ui16_motor_target_max_power = 0;
+				rt_vars.ui16_motor_battery_capacity = 0;
+			}
+
 			break;
 
           case FRAME_TYPE_FIRMWARE_VERSION:

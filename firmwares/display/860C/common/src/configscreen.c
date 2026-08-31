@@ -6,11 +6,13 @@
 
 /* Read-only string field buffers. The motor firmware version is formatted from
  * the live FIRMWARE_VERSION UART reply (g_tsdz2_firmware_version, state.h) at
- * config-screen entry; the display firmware version is a compile-time constant
- * (DISPLAY_FIRMWARE_MAJOR/MINOR/PATCH, Makefile.common); trip time is formatted
- * from ui_vars.ui32_trip_a_time the same way mainscreen.c's tripATimeField was. */
+ * config-screen entry; the display firmware version + build date are compile-time
+ * constants (DISPLAY_FIRMWARE_MAJOR/MINOR/PATCH + DISPLAY_BUILD_DATE, Makefile.common)
+ * - same format as the boot screen's version label (theme_osf_modern.c) so the two
+ * never disagree; trip time is formatted from ui_vars.ui32_trip_a_time the same way
+ * mainscreen.c's tripATimeField was. */
 static char g_motor_firmware_version_str[16];
-static char g_display_firmware_version_str[16] = DISPLAY_FIRMWARE_MAJOR "." DISPLAY_FIRMWARE_MINOR "." DISPLAY_FIRMWARE_PATCH;
+static char g_display_firmware_version_str[32] = DISPLAY_FIRMWARE_MAJOR "." DISPLAY_FIRMWARE_MINOR "." DISPLAY_FIRMWARE_PATCH " (" DISPLAY_BUILD_DATE ")";
 static char g_trip_time_str[16];
 /* History Errors -> Last error 1-4: ui_vars.ui8_last_error[] only stores the
  * raw motorErrorsIndex byte (0-9, see mainscreen.c's warnings()) - resolved
@@ -46,6 +48,13 @@ static Field tripMenus[] =
 	FIELD_READONLY_UINT("Trip distance", &ui_vars.ui32_trip_a_distance_x10, "km", false, .div_digits = 1),
 	FIELD_READONLY_STRING("Trip time", g_trip_time_str),
 	FIELD_EDITABLE_ENUM("Reset trip", &ui8_g_configuration_trip_a_reset, "no", "yes"),
+	/* Trip + odometer reset actually happens at boot, main.c right after
+	 * eeprom_init() - see its own comment for why. */
+	FIELD_EDITABLE_ENUM("Auto reset on boot", &ui_vars.ui8_auto_reset_trip_on_poweron, "no", "yes"),
+	/* Off by default: trip time counts continuously from trip start to
+	 * reset (elapsed on-bike time). Enable to pause the timer instead
+	 * whenever the wheel isn't turning (moving-time only). */
+	FIELD_EDITABLE_ENUM("Auto pause", &ui_vars.ui8_trip_auto_pause_enabled, "no", "yes"),
 #else
 	FIELD_EDITABLE_ENUM("Rst trip A", &ui8_g_configuration_trip_a_reset, "no", "yes"),
 	FIELD_EDITABLE_ENUM("Rst trip B", &ui8_g_configuration_trip_b_reset, "no", "yes"),
@@ -55,8 +64,20 @@ static Field tripMenus[] =
 static Field bikeMenus[] =
 {
 #ifndef SW102
-	FIELD_EDITABLE_ENUM("Motor power even /w eng. fault?", &ui_vars.ui8_assist_with_error_enabled, "no", "yes"),
-	FIELD_EDITABLE_ENUM("Riding mode", &ui_vars.ui8_street_mode_enabled, "street", "off-road"),
+	// 2026-08-28: "Motor power even /w eng. fault?" removed -
+	// ui_vars.ui8_assist_with_error_enabled was only ever applied motor-side
+	// via COMM_FRAME_TYPE_CONFIGURATIONS's bulk push (byte[8] bit4), which no
+	// longer applies it (see ebike_app.c's 2026-08-28 fix) - editing this did
+	// nothing on real hardware.
+	// 2026-08-28: label order was backwards - ui8_street_mode_enabled is a
+	// plain 0/1 (FIELD_EDITABLE_ENUM indexes its option strings directly by
+	// the stored value, screen.c's editEnum.options[num]), so this used to
+	// show "off-road" for value 1 (street-mode restrictions ACTIVE) and
+	// "street" for value 0 (unrestricted) - exactly backwards. A rider
+	// checking this field while the street-mode power/speed cap was silently
+	// engaged (see DEFAULT_STREET_MODE_ENABLE's own comment, eeprom.h) would
+	// have seen "off-road" and had no reason to suspect a limiter was on.
+	FIELD_EDITABLE_ENUM("Riding mode", &ui_vars.ui8_street_mode_enabled, "off-road", "street"),
 	FIELD_EDITABLE_UINT("Odometer", &ui_vars.ui32_odometer_x10, "km", 0, UINT32_MAX, .div_digits = 1, .inc_step = 10, .onSetEditable = onSetConfigurationWheelOdometer),
 	FIELD_EDITABLE_ENUM("A service", &ui_vars.ui8_service_a_distance_enable, "disabled", "chain", "brakes", "shocks", "other"),
 	FIELD_EDITABLE_UINT("A service distance", &ui_vars.ui16_service_a_distance, "km", 0, 10000, .div_digits = 0, .inc_step = 10, .onSetEditable = onSetConfigurationServiceDistanceA),
@@ -87,8 +108,23 @@ static Field batteryMenus[] =
 	FIELD_READONLY_UINT("Voltage est", &ui_vars.ui16_battery_voltage_soc_x10, "volts", false, .div_digits = 1),
 	FIELD_READONLY_UINT("Resistance est", &ui_vars.ui16_battery_pack_resistance_estimated_x1000, "mohm", 0, 1000),
 	FIELD_READONLY_UINT("Power loss est", &ui_vars.ui16_battery_power_loss, "watts", false, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Battery total Wh", &ui_vars.ui32_wh_x10_100_percent, "whr", 0, 29990, .div_digits = 1, .inc_step = 100),
-	FIELD_EDITABLE_UINT("Used Wh", &ui_vars.ui32_wh_x10, "whr", 0, 99900, .div_digits = 1, .inc_step = 10, .onSetEditable = onSetConfigurationBatterySOCUsedWh),
+	// "Reset at voltage" was cut from this menu at some point (it never got fully
+	// removed though - see batterySOCMenus below, an SW102-only dead copy of this
+	// whole menu that still has it) while the underlying auto-reset check
+	// (state.c's rt_first_time_management(), gated on
+	// ui16_battery_voltage_reset_wh_counter_x10) kept running unconditionally
+	// against whatever value was last in EEPROM - stock default 57.4V (a 52V/14S
+	// pack's full-charge voltage), unreachable on a lower-cell-count pack, so the
+	// Wh-used counter could never auto-reset and had to be corrected by hand.
+	// Restored 2026-08-28.
+	FIELD_EDITABLE_UINT("Reset at voltage", &ui_vars.ui16_battery_voltage_reset_wh_counter_x10, "volts", 160, 680, .div_digits = 1),
+	FIELD_EDITABLE_UINT("Battery total Wh", &ui_vars.ui32_wh_x10_100_percent, "whr", 0, 29990, .div_digits = 1, .inc_step = 100, .no_wrap = true),
+	// no_wrap: without it, holding "-" one step past 0 used to jump straight to
+	// 9990.0 Wh (the field's own max) instead of clamping at 0 - a real, reported
+	// papercut on a 500W hub motor that will never see a genuinely 4-digit Wh
+	// reading. Fixed 2026-08-28, alongside restoring the auto-reset field above so
+	// manual correction should rarely be needed at all.
+	FIELD_EDITABLE_UINT("Used Wh", &ui_vars.ui32_wh_x10, "whr", 0, 99900, .div_digits = 1, .inc_step = 10, .onSetEditable = onSetConfigurationBatterySOCUsedWh, .no_wrap = true),
 	FIELD_EDITABLE_ENUM("Manual reset", &ui8_g_configuration_battery_soc_reset, "no", "yes"),
 #else
 	FIELD_EDITABLE_UINT("Max curren", &ui_vars.ui8_battery_max_current, "amps", 1, 26),
@@ -148,7 +184,11 @@ static Field torqueSensorMenus[] =
 {
 	FIELD_EDITABLE_ENUM("Calibration", &ui_vars.ui8_torque_sensor_calibration_feature_enabled, "disable", "enable"),
 	FIELD_EDITABLE_UINT("Weight on pedal", &ui_vars.ui8_weight_on_pedal, "kg", 20, 80),
-	FIELD_EDITABLE_UINT("Torque adc offset", &ui_vars.ui16_adc_pedal_torque_offset, "", 0, 300),
+	// 2026-08-28: "Torque adc offset" removed - ui_vars.ui16_adc_pedal_torque_offset
+	// was only ever wired into the motor's live calibration offset-min/max window
+	// via COMM_FRAME_TYPE_CONFIGURATIONS (byte[76]/[77]), which no longer applies
+	// it (see ebike_app.c's 2026-08-28 fix) - editing this did nothing on real
+	// hardware.
 	FIELD_EDITABLE_UINT("Torque adc max", &ui_vars.ui16_adc_pedal_torque_max, "", 0, 500),
 	FIELD_EDITABLE_UINT("Torque adc on weight", &ui_vars.ui16_adc_pedal_torque_with_weight, "", 100, 500),
 	FIELD_EDITABLE_ENUM("Default weight", &ui8_g_configuration_set_default_weight, "no", "yes"),
@@ -189,8 +229,13 @@ static Field motorTempMenus[] =
 {
 #ifndef SW102
 	FIELD_EDITABLE_UINT("Temp. min warn offset", &ui_vars.ui8_temp_min_warn_offset, "C", -50, 0, .is_signed = true),
-	FIELD_READONLY_UINT("Temp. min limit", &ui_vars.ui8_motor_temperature_min_limit_value, "C"),
-	FIELD_READONLY_UINT("Temp. max limit", &ui_vars.ui8_motor_temperature_max_limit_value, "C"),
+	// 2026-08-28: "Temp. min/max limit" removed - these mirrored
+	// ui_vars.ui8_optional_ADC_function's TEMPERATURE_CONTROL byte[12]/[13]
+	// in the COMM_FRAME_TYPE_CONFIGURATIONS push, which no longer applies
+	// motor-side (see ebike_app.c's 2026-08-28 fix); the "Feature" field that
+	// would even select TEMPERATURE_CONTROL mode only exists in the SW102
+	// branch below, so on this display these always just echoed a static
+	// unused-mode value with no connection to real hardware.
 	FIELD_EDITABLE_ENUM("Display Temp Icon", &ui_vars.ui8_display_temp_icon_enabled, "no", "yes"),
 	FIELD_EDITABLE_ENUM("Display Temp Value", &ui_vars.ui8_display_temp_value_enabled, "no", "yes"),
 	FIELD_EDITABLE_ENUM("Units", &ui_vars.ui8_screen_temperature, "auto", "celsius", "farenheit"),
@@ -214,6 +259,23 @@ static Field displayMenus[] =
 	FIELD_EDITABLE_ENUM("Battery field", &ui_vars.ui8_battery_field_enable, "percentage", "disabled", "battery voltage"),
 	FIELD_EDITABLE_UINT("Brightness (lights on)", &ui_vars.ui8_lcd_backlight_on_brightness, "", 5, 100, .inc_step = 5, .onSetEditable = onSetConfigurationDisplayLcdBacklightOnBrightness),
 	FIELD_EDITABLE_UINT("Brightness (lights off)", &ui_vars.ui8_lcd_backlight_off_brightness, "", 5, 100, .inc_step = 5, .onSetEditable = onSetConfigurationDisplayLcdBacklightOffBrightness),
+#if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
+	// Light-sensor hardware only exists on these 3 targets (see adc.c's
+	// adc_light_sensor_get(), also gated this way) - 850C/850C_2021 use
+	// that same ADC pin for battery voltage instead, and their ui_vars_t
+	// doesn't even have these fields (state.h, same guard). Matching this
+	// guard here isn't cosmetic: without it these FIELD_EDITABLE_* macros
+	// reference struct members that don't exist on those targets - a hard
+	// compile error, not a runtime no-op. Found 2026-08-23 once a Makefile
+	// clean-target bug (that let a stale object mask this) got fixed.
+	FIELD_READONLY_UINT("Current brightness", &ui_vars.ui8_current_brightness_percent, "", false, .div_digits = 0),
+	FIELD_EDITABLE_ENUM("Auto headlights", &ui_vars.ui8_light_sensor_enabled, "disable", "enable"),
+	FIELD_EDITABLE_UINT("Headlight sensitivity %", &ui_vars.ui8_light_sensor_sensitivity, "", 1, 100),
+	FIELD_EDITABLE_UINT("Headlight hysteresis %", &ui_vars.ui8_light_sensor_hysteresis, "", 1, 20),
+	FIELD_EDITABLE_ENUM("Auto brightness", &ui_vars.ui8_auto_brightness_enabled, "disable", "enable"),
+	FIELD_EDITABLE_UINT("Auto brightness minimum", &ui_vars.ui8_auto_brightness_min, "", 5, 100, .inc_step = 5),
+	FIELD_EDITABLE_UINT("Auto brightness maximum", &ui_vars.ui8_auto_brightness_max, "", 5, 100, .inc_step = 5),
+#endif
 	FIELD_EDITABLE_ENUM("Buttons invert", &ui_vars.ui8_buttons_up_down_invert, "default", "invert"),
 	FIELD_EDITABLE_UINT("Auto power off", &ui_vars.ui8_lcd_power_off_time_minutes, "mins", 0, 255),
 	FIELD_EDITABLE_ENUM("Units", &ui_vars.ui8_units_type, "SI", "Imperial"),
@@ -234,7 +296,19 @@ static Field technicalMenus[] =
 #ifndef SW102
 	FIELD_READONLY_STRING("Motor firmware", g_motor_firmware_version_str),
 	FIELD_READONLY_STRING("Display firmware", g_display_firmware_version_str),
-	FIELD_READONLY_UINT("Max motor power", &ui_vars.ui16_max_motor_power, "watts", false, .div_digits = 0),
+	// 2026-08-28: real motor->display echo-back now exists
+	// (COMM_FRAME_TYPE_PERIODIC, ebike_app.c) - these four are genuinely read
+	// back from the motor's own config.h/EEPROM every cycle, unlike the old
+	// "Wheel circumference"/"Max motor power" fields removed from here
+	// earlier today (which showed ui_vars.ui16_wheel_perimeter/
+	// ui16_max_motor_power - purely display-local EEPROM guesses with no
+	// echo-back at the time, confirmed showing 2100mm/500W on a bike actually
+	// configured for 1627mm/1200W).
+	FIELD_READONLY_UINT("Motor wheel circ", &ui_vars.ui16_motor_wheel_perimeter, "mm", false, .div_digits = 0),
+	FIELD_READONLY_UINT("Motor bat cur max", &ui_vars.ui8_motor_battery_current_max, "A", false, .div_digits = 0),
+	FIELD_READONLY_UINT("Motor max power", &ui_vars.ui16_motor_target_max_power, "W", false, .div_digits = 0),
+	FIELD_READONLY_UINT("Motor bat capacity", &ui_vars.ui16_motor_battery_capacity, "Wh", false, .div_digits = 0),
+	FIELD_READONLY_UINT("Wheel ticks", &ui_vars.ui32_wheel_speed_sensor_tick_counter, "", false, .div_digits = 0),
 	FIELD_READONLY_UINT("PWM frequency", &ui_vars.ui8_pwm_frequency, "kHz", false, .div_digits = 0),
 	FIELD_READONLY_UINT("ADC battery current", &ui_vars.ui16_adc_battery_current, ""),
 	FIELD_READONLY_UINT("ADC throttle sensor", &ui_vars.ui8_adc_throttle, ""),
@@ -318,45 +392,24 @@ static Field motorMenus[] =
 #endif
 	FIELD_END };
 
-static Field powerAssistMenus[] =
-{
-	FIELD_EDITABLE_UINT("Level 1", &ui_vars.ui8_assist_level_factor[POWER_MODE][0], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 2", &ui_vars.ui8_assist_level_factor[POWER_MODE][1], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 3", &ui_vars.ui8_assist_level_factor[POWER_MODE][2], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 4", &ui_vars.ui8_assist_level_factor[POWER_MODE][3], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 5", &ui_vars.ui8_assist_level_factor[POWER_MODE][4], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 6", &ui_vars.ui8_assist_level_factor[POWER_MODE][5], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 7", &ui_vars.ui8_assist_level_factor[POWER_MODE][6], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 8", &ui_vars.ui8_assist_level_factor[POWER_MODE][7], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 9", &ui_vars.ui8_assist_level_factor[POWER_MODE][8], "", 1, 255, .div_digits = 0),
-	FIELD_END };
-	
-static Field torqueAssistMenus[] =
-{
-	FIELD_EDITABLE_UINT("Level 1", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][0], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 2", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][1], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 3", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][2], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 4", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][3], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 5", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][4], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 6", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][5], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 7", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][6], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 8", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][7], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 9", &ui_vars.ui8_assist_level_factor[TORQUE_MODE][8], "", 1, 255, .div_digits = 0),
-	FIELD_END };
-	
-static Field cadenceAssistMenus[] =
-{
-	FIELD_EDITABLE_UINT("Level 1", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][0], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 2", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][1], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 3", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][2], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 4", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][3], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 5", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][4], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 6", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][5], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 7", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][6], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 8", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][7], "", 1, 255, .div_digits = 0),
-	FIELD_EDITABLE_UINT("Level 9", &ui_vars.ui8_assist_level_factor[CADENCE_MODE][8], "", 1, 255, .div_digits = 0),
-	FIELD_END };
-	
+// powerAssistMenus/torqueAssistMenus/cadenceAssistMenus (each a "Level 1"-"Level 9"
+// editable table into ui_vars.ui8_assist_level_factor[MODE][0..8]) were removed
+// 2026-08-28: the motor firmware no longer reads any of these values for Power/
+// Torque/Cadence mode (see ebike_app.c's communications_process_packages() -
+// ui8_riding_mode_parameter now always comes from config.h's own
+// ui8_riding_mode_parameter_array, matching the DZ40/VLCD5 protocol exactly), so
+// editing them here had zero effect on real assist strength - actively misleading
+// UI to leave in place. Real-hardware bring-up: this mismatch (860C's own 9-level
+// EEPROM table, stock defaults 25/50/75/.../250, vs. config.h's POWER_ASSIST_LEVEL_
+// 1-4/etc, e.g. 160/240/320/480) was reported as needing dramatically more rider
+// effort on 860C than DZ40 with "identical" motor settings between the two builds.
+// eMTBAssistMenus (below) has the same issue for eMTB mode but is intentionally
+// left alone for now - its "Based on" field is a separate, still-live setting with
+// no removal path yet (see UNIVERSAL_FIRMWARE_PLAN.md's "Open / ongoing" section).
+// ui8_assist_level_factor itself (and its EEPROM load/save) is untouched - it's
+// still read by mainscreen.c's "remaining distance" estimate, a display-only
+// approximation that doesn't need to match the motor's real applied factor.
+
 static Field eMTBAssistMenus[] =
 {
 	FIELD_EDITABLE_ENUM("Based on", &ui_vars.ui8_eMTB_based_on_power, "torque", "power"),
@@ -377,9 +430,6 @@ static Field eMTBAssistMenus[] =
 	FIELD_EDITABLE_UINT("Num assist levels", &ui_vars.ui8_number_of_assist_levels, "", 1, 5),
 	FIELD_EDITABLE_ENUM("Start assist level", &ui_vars.ui8_startup_assist_level, "last", "1", "2", "3", "4", "5"),
 	FIELD_EDITABLE_ENUM("Start riding mode", &ui_vars.ui8_startup_ridimg_mode, "last", "power", "torque", "cadence", "emtb", "hybrid"),
-	FIELD_SCROLLABLE("Power assist", powerAssistMenus),
-	FIELD_SCROLLABLE("Torque assist", torqueAssistMenus),
-	FIELD_SCROLLABLE("Cadence assist", cadenceAssistMenus),
 	FIELD_SCROLLABLE("eMTB assist", eMTBAssistMenus),
 	FIELD_EDITABLE_ENUM("Torque modes on", &ui_vars.ui8_torque_modes_based_on_power, "current", "power"),
 	FIELD_EDITABLE_UINT("Ref.voltage", &ui_vars.ui8_power_based_reference_voltage, "volts", 24, 54, .div_digits = 0),
@@ -387,9 +437,6 @@ static Field eMTBAssistMenus[] =
 	FIELD_EDITABLE_UINT("Num Levels", &ui_vars.ui8_number_of_assist_levels, "", 1, 5),
 	FIELD_EDITABLE_ENUM("StartLevel", &ui_vars.ui8_startup_assist_level, "last", "1", "2", "3", "4", "5"),
 	FIELD_EDITABLE_ENUM("Start mode", &ui_vars.ui8_startup_ridimg_mode, "last", "power", "torque", "cadence", "emtb", "hybrid"),
-	FIELD_SCROLLABLE("Power", powerAssistMenus),
-	FIELD_SCROLLABLE("Torque", torqueAssistMenus),
-	FIELD_SCROLLABLE("Cadence", cadenceAssistMenus),
 	FIELD_SCROLLABLE("eMTB", eMTBAssistMenus),
 	FIELD_EDITABLE_ENUM("TorqueMods", &ui_vars.ui8_torque_modes_based_on_power, "current", "power"),
 	FIELD_EDITABLE_UINT("Ref.voltag", &ui_vars.ui8_power_based_reference_voltage, "volts", 24, 54, .div_digits = 0),
@@ -496,6 +543,90 @@ static Field topMenus[] =
 	FIELD_SCROLLABLE("Technical", technicalMenus),
 #endif
 	FIELD_END };
+
+/* Generic "grey out and refuse to edit a field whose value is currently
+ * irrelevant" mechanism - e.g. "Clock hours" while "Clock field" isn't set to
+ * "clock", or torque calibration's raw ADC inputs while "Calibration" is
+ * disabled. Declarative table + one recursive walk, rather than a bespoke
+ * hand-written check per field (which is how update_backlight_preset_locks()
+ * started out - this replaces/generalizes it). Matched by each rule's target
+ * pointer against every FieldEditable in the tree, so add/remove rules here
+ * without needing to touch the menu definitions themselves.
+ *
+ * 860C/850C only (SW102 has its own differently-labeled/structured menus -
+ * this rule set is written specifically against the #ifndef SW102 field
+ * set above, would need its own pass to cover SW102's tree too). */
+#ifndef SW102
+typedef struct {
+	const uint8_t *controller; // the enable/mode field this rule watches
+	uint8_t value;              // the specific value being compared against
+	bool unlock_if_match;       // true: target UNLOCKED only when *controller==value (else locked)
+	                             // false: target LOCKED only when *controller==value (else unlocked)
+	const void *target;         // matched against a field's .editable.target
+} FieldLockRule;
+
+#define LOCK_UNLESS(ctrl, val, targ) { .controller = (const uint8_t *) (ctrl), .value = (val), .unlock_if_match = true, .target = (targ) }
+#define LOCK_WHEN(ctrl, val, targ)   { .controller = (const uint8_t *) (ctrl), .value = (val), .unlock_if_match = false, .target = (targ) }
+
+static const FieldLockRule field_lock_rules[] = {
+	// Display: "Clock hours"/"minutes" only matter while "Clock field" is
+	// exactly "clock" (1 of 3 options: disable/clock/batt volts).
+	LOCK_UNLESS(&ui_vars.ui8_time_field_enable, 1, &ui8_g_configuration_clock_hours),
+	LOCK_UNLESS(&ui_vars.ui8_time_field_enable, 1, &ui8_g_configuration_clock_minutes),
+#if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
+	LOCK_WHEN(&ui_vars.ui8_light_sensor_enabled, 0, &ui_vars.ui8_light_sensor_sensitivity),
+	LOCK_WHEN(&ui_vars.ui8_light_sensor_enabled, 0, &ui_vars.ui8_light_sensor_hysteresis),
+	LOCK_WHEN(&ui_vars.ui8_auto_brightness_enabled, 0, &ui_vars.ui8_auto_brightness_min),
+	LOCK_WHEN(&ui_vars.ui8_auto_brightness_enabled, 0, &ui_vars.ui8_auto_brightness_max),
+	// Inverse of the above - the two fixed presets are irrelevant once auto
+	// brightness is driving the backlight instead.
+	LOCK_WHEN(&ui_vars.ui8_auto_brightness_enabled, 1, &ui_vars.ui8_lcd_backlight_on_brightness),
+	LOCK_WHEN(&ui_vars.ui8_auto_brightness_enabled, 1, &ui_vars.ui8_lcd_backlight_off_brightness),
+#endif
+	// Bike: service A/B distance only matters once its own enable enum is
+	// off "disabled" (0) - any of chain/brakes/shocks/other (1-4) counts.
+	LOCK_WHEN(&ui_vars.ui8_service_a_distance_enable, 0, &ui_vars.ui16_service_a_distance),
+	LOCK_WHEN(&ui_vars.ui8_service_b_distance_enable, 0, &ui_vars.ui16_service_b_distance),
+	// Torque sensor: the raw calibration inputs only matter while
+	// "Calibration" is enabled - otherwise they're just unused numbers.
+	LOCK_WHEN(&ui_vars.ui8_torque_sensor_calibration_feature_enabled, 0, &ui_vars.ui8_weight_on_pedal),
+	LOCK_WHEN(&ui_vars.ui8_torque_sensor_calibration_feature_enabled, 0, &ui_vars.ui16_adc_pedal_torque_offset),
+	LOCK_WHEN(&ui_vars.ui8_torque_sensor_calibration_feature_enabled, 0, &ui_vars.ui16_adc_pedal_torque_max),
+	LOCK_WHEN(&ui_vars.ui8_torque_sensor_calibration_feature_enabled, 0, &ui_vars.ui16_adc_pedal_torque_with_weight),
+	LOCK_WHEN(&ui_vars.ui8_torque_sensor_calibration_feature_enabled, 0, &ui8_g_configuration_set_default_weight),
+};
+
+static void apply_field_lock_rules(Field *menu, const Field *editing_field, int32_t editing_value) {
+	for (Field *f = menu; f->variant != FieldEnd; f++) {
+		if (f->variant == FieldScrollable) {
+			apply_field_lock_rules((Field *) f->scrollable.entries, editing_field, editing_value);
+			continue;
+		}
+		if (f->variant != FieldEditable) {
+			continue;
+		}
+		for (size_t i = 0; i < sizeof(field_lock_rules) / sizeof(field_lock_rules[0]); i++) {
+			const FieldLockRule *rule = &field_lock_rules[i];
+			if (rule->target != f->editable.target) {
+				continue;
+			}
+			// If the field currently being edited IS this rule's controller,
+			// its committed storage hasn't been written yet (commit_edit()
+			// only does that on confirm) - use the live in-progress value
+			// instead, so cycling the controller relocks dependents immediately.
+			bool match = (editing_field && editing_field->editable.target == (const void *) rule->controller)
+				? (uint8_t) editing_value == rule->value
+				: *rule->controller == rule->value;
+			f->rw->locked = rule->unlock_if_match ? !match : match;
+			break;
+		}
+	}
+}
+
+void update_field_locks(const Field *editing_field, int32_t editing_value) {
+	apply_field_lock_rules(topMenus, editing_field, editing_value);
+}
+#endif /* SW102 */
 
 #ifndef SW102
 static Field configRoot = FIELD_SCROLLABLE("Configurations", topMenus);

@@ -255,6 +255,26 @@ export function renderToggleGroup(
   return group;
 }
 
+/**
+ * iOS-style slide toggle for a plain boolean, instead of a bare
+ * <input type="checkbox"> - a real checkbox still does the work (native
+ * keyboard/screen-reader behavior, no bespoke ARIA needed), just visually
+ * replaced by .switch-track/.switch-thumb in dom.css, which react to the
+ * checkbox's :checked state via a CSS sibling selector rather than any JS
+ * here. Returns the whole clickable row (switch + label text) as one
+ * <label>, so the label text itself is also part of the toggle's click
+ * target, not just the small switch glyph.
+ */
+export function switchToggle(checked: boolean, labelText: string, onChange: (checked: boolean) => void): HTMLElement {
+  const input = el("input", { type: "checkbox", checked, className: "switch-input" });
+  input.addEventListener("change", () => onChange(input.checked));
+  const switchEl = el("span", { className: "switch" }, [
+    input,
+    el("span", { className: "switch-track" }, [el("span", { className: "switch-thumb" })]),
+  ]);
+  return el("label", { className: "switch-row" }, [switchEl, document.createTextNode(labelText)]);
+}
+
 export interface VisualPickerOption {
   label: string;
   image: string;

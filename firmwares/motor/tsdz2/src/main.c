@@ -80,6 +80,26 @@ static void calc_isr_load(void){
 
 
 int main(void) {
+#ifdef BOOT_HEARTBEAT
+    {
+        /* DIAGNOSTIC (build with -DBOOT_HEARTBEAT only): prove main() is
+         * reached before ANY init. Toggle the UART2 TX pin (PD5) at ~1 Hz
+         * forever. Multimeter on the motor's TX wire: cycling 0~5 V means
+         * main() runs (fault is later in init/loop); steady 0 V means the
+         * firmware dies in the C runtime before main() (RAM-layout/startup).
+         * This also re-drives PD5 as a plain GPIO before uart2_init() has
+         * ever run, so it distinguishes "UART never initialized" from
+         * "UART initialized but TX broken" on the bench. */
+        GPIO_Init(GPIOD, GPIO_PIN_5, GPIO_MODE_OUT_PP_LOW_FAST);
+        while (1) {
+            GPIO_WriteHigh(GPIOD, GPIO_PIN_5);
+            delay_ms(500);
+            GPIO_WriteLow(GPIOD, GPIO_PIN_5);
+            delay_ms(500);
+        }
+    }
+#endif
+
     // set clock at the max 16 MHz
     CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1);
 

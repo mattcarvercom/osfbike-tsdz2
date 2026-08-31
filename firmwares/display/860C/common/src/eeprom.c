@@ -51,8 +51,15 @@ const eeprom_data_t m_eeprom_data_defaults = {
   .ui16_service_b_distance = DEFAULT_VALUE_SERVICE_B_DISTANCE,
   .ui8_service_a_distance_enable = DEFAULT_VALUE_SERVICE_A_DISTANCE_ENABLE,
   .ui8_service_b_distance_enable = DEFAULT_VALUE_SERVICE_B_DISTANCE_ENABLE,
+  .ui8_auto_reset_trip_on_poweron = DEFAULT_VALUE_AUTO_RESET_TRIP_ON_POWERON,
   .ui32_wh_x10_trip_a_offset = DEFAULT_VALUE_WH_X10_TRIP_A_OFFSET,
   .ui32_wh_x10_trip_b_offset = DEFAULT_VALUE_WH_X10_TRIP_B_OFFSET,
+  .ui8_trip_auto_pause_enabled = DEFAULT_VALUE_TRIP_AUTO_PAUSE_ENABLED,
+#endif
+#if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
+  .ui8_auto_brightness_enabled = DEFAULT_VALUE_AUTO_BRIGHTNESS_ENABLED,
+  .ui8_auto_brightness_min = DEFAULT_VALUE_AUTO_BRIGHTNESS_MIN,
+  .ui8_auto_brightness_max = DEFAULT_VALUE_AUTO_BRIGHTNESS_MAX,
 #endif
   
   .ui32_wh_x10_offset = DEFAULT_VALUE_WH_X10_OFFSET,
@@ -988,6 +995,19 @@ void eeprom_init_variables(void) {
     m_eeprom_data.ui8_service_a_distance_enable;
   ui_vars->ui8_service_b_distance_enable =
     m_eeprom_data.ui8_service_b_distance_enable;
+  ui_vars->ui8_auto_reset_trip_on_poweron =
+    m_eeprom_data.ui8_auto_reset_trip_on_poweron;
+  ui_vars->ui8_trip_auto_pause_enabled =
+    m_eeprom_data.ui8_trip_auto_pause_enabled;
+#endif
+
+#if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
+  ui_vars->ui8_auto_brightness_enabled =
+    m_eeprom_data.ui8_auto_brightness_enabled;
+  ui_vars->ui8_auto_brightness_min =
+    m_eeprom_data.ui8_auto_brightness_min;
+  ui_vars->ui8_auto_brightness_max =
+    m_eeprom_data.ui8_auto_brightness_max;
 #endif
 
   rt_vars->ui32_trip_a_distance_x10 =
@@ -1262,6 +1282,19 @@ void eeprom_write_variables(void) {
     ui_vars->ui8_service_a_distance_enable;
   m_eeprom_data.ui8_service_b_distance_enable =
     ui_vars->ui8_service_b_distance_enable;
+  m_eeprom_data.ui8_auto_reset_trip_on_poweron =
+    ui_vars->ui8_auto_reset_trip_on_poweron;
+  m_eeprom_data.ui8_trip_auto_pause_enabled =
+    ui_vars->ui8_trip_auto_pause_enabled;
+#endif
+
+#if defined(DISPLAY_860C) || defined(DISPLAY_860C_V12) || defined(DISPLAY_860C_V13)
+  m_eeprom_data.ui8_auto_brightness_enabled =
+    ui_vars->ui8_auto_brightness_enabled;
+  m_eeprom_data.ui8_auto_brightness_min =
+    ui_vars->ui8_auto_brightness_min;
+  m_eeprom_data.ui8_auto_brightness_max =
+    ui_vars->ui8_auto_brightness_max;
 #endif
 
   m_eeprom_data.ui32_trip_a_distance_x10 =

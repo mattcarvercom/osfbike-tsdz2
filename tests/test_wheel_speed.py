@@ -110,11 +110,18 @@ OEM_WHEEL_SPEED_DIVISOR = 384
 	wheel_size=st.integers(min_value=10, max_value=32) # 10 to 32inch
     )
 def test_calc_oem_wheel_speed(ticks, wheel_size):
+    ebike.ui8_display_ready_flag = 1
     ebike.ui8_oem_wheel_diameter = wheel_size
     ebike.ui16_wheel_speed_sensor_ticks = ticks
-    ui16_wheel_perimeter = int(wheel_inch_to_mm_circumference(wheel_size)) 
+    ui16_wheel_perimeter = int(wheel_inch_to_mm_circumference(wheel_size))
     ebike.m_configuration_variables.ui16_wheel_perimeter = ui16_wheel_perimeter
-    expected = wheel_size * 80 * 10 * ticks / (ebike.m_configuration_variables.ui16_wheel_perimeter * OEM_WHEEL_SPEED_DIVISOR)
+    # ticks == 65535 (WHEEL_SPEED_COUNTER_MAX) means the wheel is stopped -
+    # calc_oem_wheel_speed() resets to 0 there instead of the raw formula
+    # value, same as calc_wheel_speed()'s own idle case.
+    if ticks >= 65535:
+        expected = 0
+    else:
+        expected = wheel_size * 80 * 10 * ticks / (ebike.m_configuration_variables.ui16_wheel_perimeter * OEM_WHEEL_SPEED_DIVISOR)
     ebike.calc_oem_wheel_speed()
     result = ebike.ui16_oem_wheel_speed_time
 

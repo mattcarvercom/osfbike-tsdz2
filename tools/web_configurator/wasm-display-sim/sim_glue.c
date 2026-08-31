@@ -306,6 +306,25 @@ uint8_t sim_get_units_imperial(void) { return ui_vars.ui8_units_type; }
 EMSCRIPTEN_KEEPALIVE
 void sim_set_error(uint8_t error_bits) { rt_vars.ui8_error_states = error_bits; }
 
+/* Sim-only "Service due" override for the display-sim page's own toggle -
+ * overwrites whatever A service is currently set to (Configurations ->
+ * Bike, possibly navigated to by hand in the sim itself), rather than
+ * synthesizing a separate override path the real theme_osf_modern.c would
+ * need to know about. Directly drives the same two real fields
+ * theme_osf_modern.c's service icon and mainscreen.c's boot warning both
+ * already key off: ui_vars.ui8_service_a_distance_enable (config-menu-owned,
+ * never touched by copy_rt_to_ui_vars(), same as ui8_lights above - safe to
+ * set directly) and rt_vars.ui16_service_a_distance (the live countdown,
+ * mirrored into ui_vars every tick by state.c's copy_rt_to_ui_vars()). "Off"
+ * sets a large distance rather than merely disabling, so a due->not-due
+ * toggle in the same session doesn't get raced by rt_calc_odometer()'s own
+ * once-per-km decrement while riding is simulated. */
+EMSCRIPTEN_KEEPALIVE
+void sim_set_service_due(uint8_t due) {
+  ui_vars.ui8_service_a_distance_enable = due ? 1 : 0;
+  rt_vars.ui16_service_a_distance = due ? 0 : 9999;
+}
+
 /* ---- Entry points ------------------------------------------------------ */
 
 /* state.c's rt_first_time_management()/rt_graph_process() are real firmware
@@ -318,23 +337,87 @@ void sim_set_error(uint8_t error_bits) { rt_vars.ui8_error_states = error_bits; 
  * here rather than editing the submodule, same as ui8_g_battery_soc above. */
 extern uint8_t rt_first_time_management(void);
 
+/* state.c's rt_calc_odometer()/rt_calc_trips() are the other two real
+ * rt_processing() pieces this sim needs (odometer/trip distance/trip timer/
+ * Wh-per-distance all live inside them) - un-static'd in state.c (they used
+ * to be file-local, only ever called from rt_processing() itself) rather
+ * than adding a header declaration, same "redeclare here, don't touch the
+ * shared header for a sim-only caller" convention as
+ * rt_first_time_management() above. Deliberately NOT calling the rest of
+ * rt_processing() (rt_low_pass_filter_battery_voltage_current_power(),
+ * rt_low_pass_filter_pedal_power(), motor_init(), communications()): those
+ * derive their outputs from raw ADC-style fields (rt_vars.ui8_battery_current_x5,
+ * ui16_adc_battery_voltage, ui16_pedal_power_x10, ...) this sim never sets -
+ * calling them would silently recompute rt_vars.ui16_battery_power_filtered/
+ * ui16_pedal_power_filtered from those (always-zero) inputs, clobbering the
+ * sim page's own battery-power/human-power sliders back to ~0 every 100ms
+ * (the same "don't let a real derivation stomp a direct sim_set_* write"
+ * hazard this file's header comment already calls out for ui_vars). */
+extern void rt_calc_odometer(void);
+extern void rt_calc_trips(void);
+/* rt_calc_wh() is already non-static in state.c (unlike the two above), but
+ * likewise undeclared in any header - same redeclare-here treatment. */
+extern void rt_calc_wh(void);
+
 static int sim_rt_process_counter = 0;
 
 /* One real firmware tick: main_idle() (the 20ms UI loop) plus, every 5th
- * call, the two rt_processing() pieces this sim actually needs at their
- * real 100ms cadence. rt_first_time_management() is what flips
+ * call, the rt_processing() pieces this sim actually needs at their real
+ * 100ms cadence. rt_first_time_management() is what flips
  * ui8_g_motorVariablesStabilized (mainscreen.c's wheel_speed() hides speed
  * until then - a real safety feature) and, the same real moment, sets
  * activeGraphs (mainscreen.c's graphs only accumulate data once that's
  * non-NULL) - both after a real 5-simulated-second delay, not faked.
  * rt_graph_process() is what actually pushes accumulated samples into the
- * graph's ring buffer every 3.644s (screen.h's GRAPH_DATA_0_INTERVAL_MS). */
+ * graph's ring buffer every 3.644s (screen.h's GRAPH_DATA_0_INTERVAL_MS).
+ *
+ * rt_calc_odometer()/rt_calc_trips()/rt_calc_wh() (added alongside the
+ * above, same real 100ms cadence, same real order rt_processing() itself
+ * uses - trips and wh both read state odometer just updated) drive
+ * odometer, trip A distance, trip A timer, and Wh/km(mi) - previously never
+ * called at all in this sim (nothing but a real 100ms UART ISR ever called
+ * them), so those four fields sat frozen at their EEPROM defaults no matter
+ * how long speed/power sliders moved. rt_calc_odometer() itself needs a
+ * real wheel-rotation tick count (ui_vars.ui32_wheel_speed_sensor_tick_counter)
+ * as input - on real hardware that comes from the motor's own UART report
+ * (state.c's uart_receive_package(), bytes 21-23); synthesized here instead,
+ * straight from the sim's already-simulated rt_vars.ui16_wheel_speed_x10,
+ * using the same distance = ticks * wheel_perimeter relationship
+ * rt_calc_odometer() itself expects. rt_vars.ui16_full_battery_power_filtered_x50
+ * (rt_calc_wh()'s energy-accumulation input, normally computed inside the
+ * skipped rt_low_pass_filter_battery_voltage_current_power() from raw
+ * current/resistance) is likewise approximated directly from the sim's own
+ * rt_vars.ui16_battery_power_filtered (already driven by the battery-power
+ * slider) - this omits that real function's small battery/cable
+ * internal-resistance loss term (no simulated battery current to derive it
+ * from), so Wh/km(mi) here reads a little low versus a real pack, but is
+ * otherwise driven by genuine accumulation over genuine (simulated) power,
+ * not a placeholder. */
 static void advance_tick(void) {
   sim_ms_counter += 20;
   ui32_seconds_since_startup = sim_ms_counter / 1000;
   main_idle();
   if (++sim_rt_process_counter >= 5) {
     sim_rt_process_counter = 0;
+
+    /* Synthesize this 100ms slice's wheel rotation ticks from simulated
+     * speed. ui16_wheel_speed_x10 is km/h*10; *1000/36000 converts to
+     * mm/ms. A static remainder (not reset per-call) carries fractional
+     * ticks forward so slow speeds still accumulate correctly over many
+     * calls instead of truncating to 0 every time. */
+    if (rt_vars.ui16_wheel_perimeter > 0) {
+      static double sim_wheel_tick_remainder_mm = 0.0;
+      double distance_mm = ((double)rt_vars.ui16_wheel_speed_x10) * 1000.0 / 36000.0 * 100.0
+                            + sim_wheel_tick_remainder_mm;
+      uint32_t new_ticks = (uint32_t)(distance_mm / rt_vars.ui16_wheel_perimeter);
+      sim_wheel_tick_remainder_mm = distance_mm - (double)new_ticks * rt_vars.ui16_wheel_perimeter;
+      ui_vars.ui32_wheel_speed_sensor_tick_counter += new_ticks;
+    }
+    rt_vars.ui16_full_battery_power_filtered_x50 = (uint16_t)((uint32_t)rt_vars.ui16_battery_power_filtered * 50);
+
+    rt_calc_odometer();
+    rt_calc_trips();
+    rt_calc_wh();
     rt_first_time_management();
     rt_graph_process();
     /* Real firmware derives this from a 100ms UART ISR
@@ -361,6 +444,24 @@ void sim_init(void) {
    * it and config-derived values (wheel circumference, unit conversions,
    * ...) stay zeroed, which main_idle()'s real processing divides by. */
   eeprom_init();
+
+  /* Real main.c's screen_init() (860C_850C/src/main.c, not compiled into
+   * this sim - see this file's header comment on why only common/src is
+   * built) sets this once at boot; state.c's copy_rt_to_ui_vars() only
+   * copies "Bike menu edit" fields (wheel_perimeter, wheel_max_speed,
+   * throttle/cruise-feature-enabled, street-mode fields, ...) from ui_vars
+   * into rt_vars when EITHER this flag is set OR the password gate is open
+   * - and this firmware's own EEPROM defaults set
+   * DEFAULT_VALUE_PASSWORD_ENABLED=1, so the password gate is normally
+   * *closed* by default, not open. Without this, rt_vars.ui16_wheel_perimeter
+   * (and the other fields above) would silently stay at their C
+   * zero-initialized value forever in this sim - harmless before now (real
+   * hardware sends rt_vars.ui16_wheel_perimeter to the motor over UART,
+   * which this sim never parses), but a real dependency now that
+   * rt_calc_odometer() (called below, every real 100ms) needs a genuine
+   * nonzero wheel_perimeter to convert simulated wheel-rotation ticks into
+   * distance. */
+  ui8_g_screen_init_flag = 1;
   /* No real motor to hold a real UART handshake with, so
    * rt_first_time_management()'s stabilization check (state.c) would
    * otherwise stall forever in MOTOR_INIT_GET_MOTOR_ALIVE waiting for a
@@ -384,6 +485,16 @@ void sim_init(void) {
    * the first screen. See theme_osf_modern.c's doc comment on
    * g_graph_screen_demo_mode for what it changes and why. */
   g_graph_screen_demo_mode = true;
+
+  /* Sim-only override, same reasoning as g_graph_screen_demo_mode above:
+   * real EEPROM now defaults both of these to 0 (eeprom.h's
+   * DEFAULT_VALUE_DISPLAY_TEMP_ICON/VALUE_ENABLED - no temperature sensor
+   * wired by default, see that macro's own comment), which would leave the
+   * sim's motor-temp readout permanently hidden even though it always has
+   * fake temperature data to show. Force them on here so the sim keeps
+   * demoing the feature regardless of the real-firmware default. */
+  ui_vars.ui8_display_temp_icon_enabled = 1;
+  ui_vars.ui8_display_temp_value_enabled = 1;
 
   /* Build the main screen through the theme registry, keyed by the
    * EEPROM-persisted ui8_active_theme_index. Same shared logic the real
